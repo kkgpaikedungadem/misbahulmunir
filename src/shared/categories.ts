@@ -101,14 +101,44 @@ export interface CategoryConfig {
   }[];
 }
 
-export const DEFAULT_PROFILE_PHOTO_URL =
-  '/src/assets/images/teacher_profile_portrait_1795330622875.jpg';
+export function getAppBaseUrl(): string {
+  try {
+    const base = import.meta.env && import.meta.env.BASE_URL;
+    if (typeof base === 'string' && base.length > 0) {
+      return base.endsWith('/') ? base : `${base}/`;
+    }
+  } catch {
+    // Node / server runtime fallback
+  }
+  return '/';
+}
 
-export const SCHOOL_BANNER_URL =
-  '/src/assets/images/school_piloting_banner_1795330623823.jpg';
+export function resolveAppAssetUrl(assetPath: string): string {
+  const trimmed = (assetPath || '').trim();
+  if (!trimmed) return '';
+  if (/^(https?:|data:|blob:)/i.test(trimmed)) return trimmed;
+  const base = getAppBaseUrl();
+  const assetMatch = trimmed.match(/^(?:\/[^/]+)?(\/src\/assets\/.+)$/);
+  if (assetMatch) {
+    return `${base}${assetMatch[1].slice(1)}`;
+  }
+  if (trimmed.startsWith('src/assets/')) {
+    return `${base}${trimmed}`;
+  }
+  return trimmed;
+}
 
-export const TAHFIDZ_COVER_URL =
-  '/src/assets/images/tahfidz_quran_cover_1795330623011.jpg';
+export const DEFAULT_PROFILE_PHOTO_URL = resolveAppAssetUrl(
+  '/src/assets/images/teacher_profile_portrait_1795330622875.jpg'
+);
+
+export const SCHOOL_BANNER_URL = resolveAppAssetUrl(
+  '/src/assets/images/school_piloting_banner_1795330623823.jpg'
+);
+
+export const TAHFIDZ_COVER_URL = resolveAppAssetUrl(
+  '/src/assets/images/tahfidz_quran_cover_1795330623011.jpg'
+);
 
 export const JUZ_30_SURAHS: string[] = [
   'An-Naba',

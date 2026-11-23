@@ -26,6 +26,8 @@ jobs:
       - name: Install dependencies
         run: npm install --legacy-peer-deps
       - name: Build
+        env:
+          VITE_APPS_SCRIPT_URL: ${{ vars.APPS_SCRIPT_URL }}
         run: npm run build
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

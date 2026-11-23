@@ -1,5 +1,6 @@
 import { FormEvent, useState } from 'react';
 import { Lock, X } from 'lucide-react';
+import { loginAdmin } from '../services/portalClient';
 
 interface AdminLoginModalProps {
   open: boolean;
@@ -30,14 +31,11 @@ export function AdminLoginModal({
 
     setSubmitting(true);
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username.trim(), password }),
-      });
-      const data = (await res.json()) as { authenticated?: boolean; error?: string };
-      if (!res.ok || !data.authenticated) {
-        setError(data.error || 'Login gagal. Periksa kembali kredensial Anda.');
+      const result = await loginAdmin(username, password);
+      if (!result.ok) {
+        setError(
+          result.error || 'Login gagal. Periksa kembali kredensial Anda.'
+        );
         return;
       }
       setUsername('');

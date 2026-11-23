@@ -828,3 +828,150 @@ function writeTab_(ss, tabName, rows) {
     sheet.getRange(1, 1, 1, rows[0].length).setFontWeight('bold');
   }
 }`;
+
+export function verifyStaticAdminCredentials(
+  username: string,
+  password: string
+): boolean {
+  return username.trim() === 'gpai' && password === 'misbah5758';
+}
+
+export function escapeXml(str: string): string {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+export function buildExcelWorkbookXml(records: AdminRecord[]): string {
+  const sheetsXml = CATEGORIES.map((cat) => {
+    const catRecords = records.filter((r) => r.categoryId === cat.id);
+    const rows = buildSpreadsheetSheetRows(cat.id, catRecords);
+    const rowsXml = rows
+      .map(
+        (row, rowIndex) =>
+          `<Row>${row
+            .map(
+              (cell) =>
+                `<Cell${
+                  rowIndex === 0 ? ' ss:StyleID="Header"' : ''
+                }><Data ss:Type="String">${escapeXml(cell)}</Data></Cell>`
+            )
+            .join('')}</Row>`
+      )
+      .join('');
+    return `<Worksheet ss:Name="${escapeXml(
+      cat.sheetTabName.slice(0, 31)
+    )}"><Table>${rowsXml}</Table></Worksheet>`;
+  }).join('');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
+ <Styles>
+  <Style ss:ID="Header">
+   <Font ss:Bold="1" ss:Color="#FFFFFF"/>
+   <Interior ss:Color="#0F6B4E" ss:Pattern="Solid"/>
+  </Style>
+ </Styles>
+ ${sheetsXml}
+</Workbook>`;
+}
+
+export function buildPublicDocumentHtml(
+  record: AdminRecord,
+  profile: TeacherProfile
+): string {
+  const config = CATEGORY_MAP[record.categoryId];
+  const safeTitle = escapeXml(record.studentName || record.title);
+  return `<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <title>${safeTitle} — ${escapeXml(config.name)}</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; color: #0f172a; margin: 40px auto; max-width: 780px; padding: 0 24px; line-height: 1.6; }
+    .header { border-bottom: 2px solid #173828; padding-bottom: 16px; margin-bottom: 24px; }
+    .kicker { font-size: 12px; font-weight: 700; color: #0F6B4E; text-transform: uppercase; letter-spacing: 0.05em; }
+    h1 { font-size: 24px; margin: 6px 0 4px; }
+    .meta { font-size: 13px; color: #475569; }
+    table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+    th, td { text-align: left; padding: 10px 12px; border: 1px solid #cbd5e1; font-size: 14px; }
+    th { width: 32%; background: #f8fafc; color: #334155; }
+    .summary { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 14px; }
+    .sign { margin-top: 48px; text-align: right; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="kicker">${escapeXml(config.order)}. ${escapeXml(
+    config.name
+  )} · Arsip Publik Administrasi GPAI</div>
+    <h1>${safeTitle}</h1>
+    <div class="meta">${escapeXml(profile.schoolName)} · Tahun Pelajaran ${escapeXml(
+    record.academicYear
+  )} (${escapeXml(record.semester)})</div>
+  </div>
+  <table>
+    <tr><th>Nomor / Kode Referensi</th><td>${escapeXml(record.codeOrRef)}</td></tr>
+    <tr><th>Tanggal Dokumen</th><td>${escapeXml(record.date)}</td></tr>
+    <tr><th>Status Validasi</th><td>${escapeXml(record.status)}</td></tr>
+    ${
+      record.className
+        ? `<tr><th>Kelas / Sasaran</th><td>${escapeXml(record.className)}</td></tr>`
+        : ''
+    }
+    ${
+      record.metricValue
+        ? `<tr><th>Capaian / Keterangan</th><td>${escapeXml(
+            record.metricValue
+          )}</td></tr>`
+        : ''
+    }
+    ${
+      record.studentClass
+        ? `<tr><th>Kelas Siswa</th><td>${escapeXml(record.studentClass)}</td></tr>`
+        : ''
+    }
+    ${
+      record.surahRange
+        ? `<tr><th>Rentang Surah Juz 30</th><td>${escapeXml(
+            record.surahRange
+          )} (${record.surahsCompleted ?? 0}/37 Surah)</td></tr>`
+        : ''
+    }
+    ${
+      record.tajwidScore !== undefined
+        ? `<tr><th>Nilai Tajwid &amp; Kelancaran</th><td>Tajwid: ${
+            record.tajwidScore
+          } · Kelancaran: ${record.fluencyScore ?? '-'} · Predikat: ${escapeXml(
+            record.tahfidzPredicate || '-'
+          )}</td></tr>`
+        : ''
+    }
+    ${
+      record.fileName
+        ? `<tr><th>Nama Berkas Lampiran</th><td>${escapeXml(
+            record.fileName
+          )} (${escapeXml(record.fileSize || '-')})</td></tr>`
+        : ''
+    }
+  </table>
+  <div class="summary">
+    <strong>Ringkasan / Catatan:</strong><br />
+    ${escapeXml(record.summary)}
+  </div>
+  <div class="sign">
+    <div>${escapeXml(profile.location)}, ${escapeXml(record.date)}</div>
+    <div>Guru Pendidikan Agama Islam,</div>
+    <div style="margin-top: 48px; font-weight: 700;">${escapeXml(
+      profile.fullName
+    )}</div>
+    <div>NIP. ${escapeXml(profile.nip)}</div>
+  </div>
+</body>
+</html>`;
+}

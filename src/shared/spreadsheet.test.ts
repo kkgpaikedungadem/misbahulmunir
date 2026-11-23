@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CATEGORIES, JUZ_30_SURAHS } from './categories';
+import { CATEGORIES, JUZ_30_SURAHS, resolveAppAssetUrl } from './categories';
 import { DEFAULT_PROFILE } from '../data/seedData';
 import {
   buildAppsScriptPayload,
+  buildExcelWorkbookXml,
+  buildPublicDocumentHtml,
   buildSpreadsheetSheetRows,
   calculateTahfidzSummary,
   filterRecords,
@@ -16,6 +18,7 @@ import {
   parseCsvToRecords,
   validateDocumentInput,
   validateGameInput,
+  verifyStaticAdminCredentials,
 } from './spreadsheet';
 
 test('all 9 requested GPAI categories exist with unique sheet tabs', () => {
@@ -251,4 +254,38 @@ test('validateGameInput and normalizeGameItem enforce game name, link, and scree
   );
   assert.equal(parsed.games.length, 1);
   assert.equal(parsed.games[0].title, 'Kuis Huruf Hijaiyah');
+});
+
+test('verifyStaticAdminCredentials, client export builders, and resolveAppAssetUrl work accurately', () => {
+  assert.equal(verifyStaticAdminCredentials('gpai', 'misbah5758'), true);
+  assert.equal(verifyStaticAdminCredentials(' gpai ', 'misbah5758'), true);
+  assert.equal(verifyStaticAdminCredentials('gpai', 'wrong'), false);
+  assert.equal(verifyStaticAdminCredentials('admin', 'misbah5758'), false);
+
+  const rec = normalizeRecordForCategory('berkas-tpg', {
+    id: 'tpg-doc-1',
+    title: 'SKTP <Test>',
+    codeOrRef: 'SK-99',
+    academicYear: '2026/2027',
+    semester: 'Ganjil',
+    date: '2026-11-22',
+    status: 'Terverifikasi',
+    summary: 'Valid & siap cetak',
+  });
+  const xml = buildExcelWorkbookXml([rec]);
+  assert.ok(xml.includes('01_Berkas_TPG'));
+  assert.ok(xml.includes('SKTP &lt;Test&gt;'));
+
+  const html = buildPublicDocumentHtml(rec, DEFAULT_PROFILE);
+  assert.ok(html.includes('SKTP &lt;Test&gt;'));
+  assert.ok(html.includes(DEFAULT_PROFILE.nip));
+
+  assert.equal(
+    resolveAppAssetUrl('https://example.com/img.png'),
+    'https://example.com/img.png'
+  );
+  assert.equal(
+    resolveAppAssetUrl('/src/assets/images/test.jpg'),
+    '/src/assets/images/test.jpg'
+  );
 });

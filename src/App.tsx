@@ -15,6 +15,11 @@ import {
   initGoogleWorkspaceAuth,
 } from './services/googleWorkspace';
 import {
+  fetchPortalState,
+  getAdminSession,
+  logoutAdmin,
+} from './services/portalClient';
+import {
   AdminRecord,
   GameItem,
   SpreadsheetSyncInfo,
@@ -42,20 +47,11 @@ export default function App() {
 
     const fetchLatestPortal = async (forceRemote = false) => {
       try {
-        const endpoint = forceRemote ? '/api/portal?refresh=1' : '/api/portal';
-        const portalRes = await fetch(endpoint, { cache: 'no-store' });
-        if (active && portalRes.ok) {
-          const portalJson = (await portalRes.json()) as {
-            profile: TeacherProfile;
-            records: AdminRecord[];
-            games?: GameItem[];
-            syncInfo: SpreadsheetSyncInfo;
-          };
+        const portalJson = await fetchPortalState(forceRemote);
+        if (active) {
           setProfile(portalJson.profile);
           setRecords(portalJson.records);
-          if (Array.isArray(portalJson.games)) {
-            setGames(portalJson.games);
-          }
+          setGames(portalJson.games);
           setSyncInfo(portalJson.syncInfo);
           lastRefreshAt = Date.now();
         }
@@ -66,32 +62,18 @@ export default function App() {
 
     const loadInitialData = async () => {
       try {
-        const [portalRes, sessionRes] = await Promise.all([
-          fetch('/api/portal', { cache: 'no-store' }),
-          fetch('/api/auth/session', { cache: 'no-store' }),
+        const [portalJson, sessionJson] = await Promise.all([
+          fetchPortalState(false),
+          getAdminSession(),
         ]);
 
-        if (active && portalRes.ok) {
-          const portalJson = (await portalRes.json()) as {
-            profile: TeacherProfile;
-            records: AdminRecord[];
-            games?: GameItem[];
-            syncInfo: SpreadsheetSyncInfo;
-          };
+        if (active) {
           setProfile(portalJson.profile);
           setRecords(portalJson.records);
-          if (Array.isArray(portalJson.games)) {
-            setGames(portalJson.games);
-          }
+          setGames(portalJson.games);
           setSyncInfo(portalJson.syncInfo);
-          lastRefreshAt = Date.now();
-        }
-
-        if (active && sessionRes.ok) {
-          const sessionJson = (await sessionRes.json()) as {
-            authenticated: boolean;
-          };
           setIsAuthenticated(sessionJson.authenticated);
+          lastRefreshAt = Date.now();
         }
       } catch {
         // Fallback already seeded in state
@@ -144,7 +126,7 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    await logoutAdmin();
     setIsAuthenticated(false);
     setActiveView('public');
   };

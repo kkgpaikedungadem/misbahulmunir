@@ -25,7 +25,13 @@ import {
   SpreadsheetSyncInfo,
   TAHFIDZ_COVER_URL,
   TeacherProfile,
+  resolveAppAssetUrl,
 } from '../shared/categories';
+import {
+  triggerCategoryCsvDownload,
+  triggerDocumentDownload,
+  triggerWorkbookDownload,
+} from '../services/portalClient';
 import {
   calculateTahfidzSummary,
   filterRecords,
@@ -165,8 +171,9 @@ export function PublicPortal({
                     Buka Google Sheet
                   </a>
                 ) : (
-                  <a
-                    href="/api/export/workbook"
+                  <button
+                    type="button"
+                    onClick={() => triggerWorkbookDownload(records)}
                     className="inline-flex items-center gap-2 rounded-full border border-white/25 bg-white/10 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/15 whitespace-nowrap shrink-0"
                   >
                     <FileSpreadsheet
@@ -174,7 +181,7 @@ export function PublicPortal({
                       aria-hidden="true"
                     />
                     Unduh Spreadsheet
-                  </a>
+                  </button>
                 )}
               </div>
             </div>
@@ -196,7 +203,7 @@ export function PublicPortal({
                   <div className="overflow-hidden rounded-2xl bg-slate-100">
                     {!photoError && profile.photoUrl ? (
                       <img
-                        src={profile.photoUrl}
+                        src={resolveAppAssetUrl(profile.photoUrl)}
                         alt={`Foto profil ${profile.fullName}`}
                         referrerPolicy="no-referrer"
                         onError={() => setPhotoError(true)}
@@ -300,13 +307,14 @@ export function PublicPortal({
                 Berkas Administrasi Publik (9 Kategori)
               </h2>
             </div>
-            <a
-              href="/api/export/workbook"
+            <button
+              type="button"
+              onClick={() => triggerWorkbookDownload(records)}
               className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0"
             >
               <FileSpreadsheet className="h-4 w-4 text-[#0F6B4E]" aria-hidden="true" />
               Unduh Workbook Lengkap (.xls)
-            </a>
+            </button>
           </div>
 
           {/* All + 9 Category Selector Grid */}
@@ -401,13 +409,16 @@ export function PublicPortal({
                 </div>
                 <div className="flex flex-wrap items-center gap-2.5 shrink-0">
                   {activeCategory !== 'semua' && (
-                    <a
-                      href={`/api/export/csv/${activeCategory}`}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        triggerCategoryCsvDownload(activeCategory, records)
+                      }
                       className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0"
                     >
                       <Download className="h-3.5 w-3.5" aria-hidden="true" />
                       Ekspor CSV Tab Ini
-                    </a>
+                    </button>
                   )}
                   <button
                     type="button"
@@ -521,9 +532,6 @@ export function PublicPortal({
                   <tbody className="divide-y divide-slate-100">
                     {filteredRecords.map((item) => {
                       const itemCat = CATEGORY_MAP[item.categoryId];
-                      const downloadHref =
-                        item.fileUrl ||
-                        `/api/public/document/${item.id}?download=1`;
 
                       return (
                         <tr
@@ -616,15 +624,15 @@ export function PublicPortal({
                                 <Eye className="h-3.5 w-3.5" aria-hidden="true" />
                                 Lihat Berkas
                               </button>
-                              <a
-                                href={downloadHref}
-                                download={item.fileName || true}
+                              <button
+                                type="button"
+                                onClick={() => triggerDocumentDownload(item, profile)}
                                 aria-label={`Unduh ${item.studentName || item.title}`}
                                 className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50 whitespace-nowrap shrink-0"
                               >
                                 <Download className="h-3.5 w-3.5" aria-hidden="true" />
                                 Unduh
-                              </a>
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -757,13 +765,14 @@ export function PublicPortal({
                   Google Sheets Live
                 </a>
               )}
-              <a
-                href="/api/export/workbook"
+              <button
+                type="button"
+                onClick={() => triggerWorkbookDownload(records)}
                 className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50 whitespace-nowrap"
               >
                 <FileSpreadsheet className="h-3.5 w-3.5 text-[#0F6B4E]" aria-hidden="true" />
                 Unduh Workbook (.xls)
-              </a>
+              </button>
             </div>
           </div>
 
@@ -789,15 +798,16 @@ export function PublicPortal({
             <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
               {games.map((game) => {
                 const imgBroken = Boolean(failedGameImages[game.id]);
+                const resolvedShot = resolveAppAssetUrl(game.screenshotUrl);
                 return (
                   <article
                     key={game.id}
                     className="group flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs transition-shadow hover:shadow-md"
                   >
                     <div className="relative aspect-video w-full overflow-hidden bg-slate-100">
-                      {!imgBroken && game.screenshotUrl ? (
+                      {!imgBroken && resolvedShot ? (
                         <img
-                          src={game.screenshotUrl}
+                          src={resolvedShot}
                           alt={`Screenshot ${game.title}`}
                           referrerPolicy="no-referrer"
                           onError={() =>

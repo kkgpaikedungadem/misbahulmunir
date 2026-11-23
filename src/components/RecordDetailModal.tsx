@@ -1,7 +1,11 @@
 import { Download, ExternalLink, Eye, FileText, Printer, X } from 'lucide-react';
 import { useState } from 'react';
+import { triggerDocumentDownload } from '../services/portalClient';
 import { AdminRecord, CATEGORY_MAP, TeacherProfile } from '../shared/categories';
-import { calculateTahfidzSummary } from '../shared/spreadsheet';
+import {
+  buildPublicDocumentHtml,
+  calculateTahfidzSummary,
+} from '../shared/spreadsheet';
 
 interface RecordDetailModalProps {
   record: AdminRecord | null;
@@ -41,9 +45,7 @@ export function RecordDetailModal({
   const hasUploadedBinary = Boolean(record.fileUrl);
   const isImage = isImageUrl(record.fileUrl, record.fileName);
   const isPdf = isPdfUrl(record.fileUrl, record.fileName);
-  const publicPreviewUrl = `/api/public/document/${record.id}`;
-  const publicDownloadUrl =
-    record.fileUrl || `/api/public/document/${record.id}?download=1`;
+  const inlineHtmlDoc = buildPublicDocumentHtml(record, profile);
 
   return (
     <div
@@ -205,14 +207,14 @@ export function RecordDetailModal({
                 <Eye className="h-3.5 w-3.5" />
                 {showInlinePreview ? 'Sembunyikan Pratinjau' : 'Pratinjau Berkas'}
               </button>
-              <a
-                href={publicDownloadUrl}
-                download={record.fileName || true}
+              <button
+                type="button"
+                onClick={() => triggerDocumentDownload(record, profile)}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-[#173828] px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#0F291D] whitespace-nowrap shrink-0"
               >
                 <Download className="h-3.5 w-3.5" />
                 Unduh Berkas
-              </a>
+              </button>
               {record.driveViewUrl && (
                 <a
                   href={record.driveViewUrl}
@@ -245,7 +247,7 @@ export function RecordDetailModal({
               ) : (
                 <iframe
                   title={`Pratinjau Lembar Dokumen ${record.title}`}
-                  src={publicPreviewUrl}
+                  srcDoc={inlineHtmlDoc}
                   className="h-[270px] w-full border-0"
                 />
               )}

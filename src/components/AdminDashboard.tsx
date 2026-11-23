@@ -30,6 +30,7 @@ import {
   GameItem,
   SpreadsheetSyncInfo,
   TeacherProfile,
+  resolveAppAssetUrl,
 } from '../shared/categories';
 import {
   APPS_SCRIPT_CODE_TEMPLATE,
@@ -45,6 +46,18 @@ import {
   syncCategoryTabToGoogleSheet,
   uploadFileToGoogleDrive,
 } from '../services/googleWorkspace';
+import {
+  deleteAdminRecord,
+  deleteGameItem,
+  importCsvToCategory,
+  pullFromAppsScriptClient,
+  saveAdminRecord,
+  saveGameItem,
+  saveTeacherProfile,
+  syncToAppsScript,
+  triggerCategoryCsvDownload,
+  updateSyncInfoState,
+} from '../services/portalClient';
 import { ConfirmDialog } from './ConfirmDialog';
 
 interface AdminDashboardProps {
@@ -231,24 +244,8 @@ export function AdminDashboard({
         ...(fileUpload ? { fileUpload } : {}),
       };
 
-      const endpoint = editingId
-        ? `/api/admin/records/${editingId}`
-        : '/api/admin/records';
-      const method = editingId ? 'PUT' : 'POST';
-
-      const res = await fetch(endpoint, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-
-      const data = (await res.json()) as {
-        records?: AdminRecord[];
-        syncInfo?: SpreadsheetSyncInfo;
-        appsScriptSync?: { ok: boolean; message: string };
-        error?: string;
-      };
-      if (!res.ok || !data.records) {
+      const data = await saveAdminRecord(payload, editingId);
+      if (!data.ok || !data.records) {
         setFeedback({
           type: 'error',
           message: data.error || 'Gagal menyimpan data ke database.',
@@ -272,16 +269,9 @@ export function AdminDashboard({
           data.records
         );
         const nowIso = new Date().toISOString();
-        const syncRes = await fetch('/api/admin/sync-info', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lastSyncedAt: nowIso }),
-        });
-        if (syncRes.ok) {
-          const syncJson = (await syncRes.json()) as {
-            syncInfo: SpreadsheetSyncInfo;
-          };
-          onSyncInfoUpdated(syncJson.syncInfo);
+        const syncRes = await updateSyncInfoState({ lastSyncedAt: nowIso });
+        if (syncRes.ok && syncRes.syncInfo) {
+          onSyncInfoUpdated(syncRes.syncInfo);
         }
         syncMsg = ' & tersinkron real-time ke Google Sheets';
       } else if (data.appsScriptSync?.ok) {
@@ -330,15 +320,8 @@ export function AdminDashboard({
       confirmLabel: 'Ya, Hapus Data',
       variant: 'danger',
       action: async () => {
-        const res = await fetch(`/api/admin/records/${record.id}`, {
-          method: 'DELETE',
-        });
-        const data = (await res.json()) as {
-          records?: AdminRecord[];
-          syncInfo?: SpreadsheetSyncInfo;
-          error?: string;
-        };
-        if (!res.ok || !data.records) {
+        const data = await deleteAdminRecord(record.id);
+        if (!data.ok || !data.records) {
           throw new Error(data.error || 'Gagal menghapus data.');
         }
         onRecordsUpdated(data.records);
@@ -374,20 +357,8 @@ export function AdminDashboard({
         photoUpload = { fileName: photoFile.name, base64Data };
       }
 
-      const res = await fetch('/api/admin/profile', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...profileForm,
-          ...(photoUpload ? { photoUpload } : {}),
-        }),
-      });
-      const data = (await res.json()) as {
-        profile?: TeacherProfile;
-        syncInfo?: SpreadsheetSyncInfo;
-        error?: string;
-      };
-      if (!res.ok || !data.profile) {
+      const data = await saveTeacherProfile(profileForm, photoUpload);
+      if (!data.ok || !data.profile) {
         setFeedback({
           type: 'error',
           message: data.error || 'Gagal memperbarui profil guru.',
@@ -436,28 +407,16 @@ export function AdminDashboard({
         screenshotUpload = { fileName: gameScreenshotFile.name, base64Data };
       }
 
-      const endpoint = editingGameId
-        ? `/api/admin/games/${editingGameId}`
-        : '/api/admin/games';
-      const method = editingGameId ? 'PUT' : 'POST';
-
-      const res = await fetch(endpoint, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const data = await saveGameItem(
+        {
           title: gameTitle,
           gameUrl,
           screenshotUrl: gameScreenshotUrl,
           ...(screenshotUpload ? { screenshotUpload } : {}),
-        }),
-      });
-      const data = (await res.json()) as {
-        games?: GameItem[];
-        syncInfo?: SpreadsheetSyncInfo;
-        appsScriptSync?: { ok: boolean; message: string };
-        error?: string;
-      };
-      if (!res.ok || !data.games) {
+        },
+        editingGameId
+      );
+      if (!data.ok || !data.games) {
         setFeedback({
           type: 'error',
           message: data.error || 'Gagal menyimpan data Game Center.',
@@ -506,15 +465,8 @@ export function AdminDashboard({
       confirmLabel: 'Ya, Hapus Game',
       variant: 'danger',
       action: async () => {
-        const res = await fetch(`/api/admin/games/${game.id}`, {
-          method: 'DELETE',
-        });
-        const data = (await res.json()) as {
-          games?: GameItem[];
-          syncInfo?: SpreadsheetSyncInfo;
-          error?: string;
-        };
-        if (!res.ok || !data.games) {
+        const data = await deleteGameItem(game.id);
+        if (!data.ok || !data.games) {
           throw new Error(data.error || 'Gagal menghapus game.');
         }
         onGamesUpdated(data.games);
@@ -545,17 +497,8 @@ export function AdminDashboard({
         confirmLabel: 'Impor Sekarang',
         variant: 'primary',
         action: async () => {
-          const res = await fetch(`/api/admin/import/${activeCategoryId}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ csvText }),
-          });
-          const data = (await res.json()) as {
-            importedCount?: number;
-            records?: AdminRecord[];
-            error?: string;
-          };
-          if (!res.ok || !data.records) {
+          const data = await importCsvToCategory(activeCategoryId, csvText);
+          if (!data.ok || !data.records) {
             throw new Error(data.error || 'Gagal mengimpor berkas CSV.');
           }
           onRecordsUpdated(data.records);
@@ -576,15 +519,10 @@ export function AdminDashboard({
     try {
       const result = await signInWithGoogleWorkspace();
       onGoogleConnected(result.user);
-      const syncRes = await fetch('/api/admin/sync-info', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connectedEmail: result.user.email || null }),
+      const syncJson = await updateSyncInfoState({
+        connectedEmail: result.user.email || null,
       });
-      if (syncRes.ok) {
-        const syncJson = (await syncRes.json()) as {
-          syncInfo: SpreadsheetSyncInfo;
-        };
+      if (syncJson.ok && syncJson.syncInfo) {
         onSyncInfoUpdated(syncJson.syncInfo);
       }
       setFeedback({
@@ -618,20 +556,13 @@ export function AdminDashboard({
     try {
       const created = await createMasterSpreadsheet(token, profile, records);
       const nowIso = new Date().toISOString();
-      const syncRes = await fetch('/api/admin/sync-info', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          spreadsheetId: created.spreadsheetId,
-          spreadsheetUrl: created.spreadsheetUrl,
-          lastSyncedAt: nowIso,
-          autoSyncEnabled: true,
-        }),
+      const syncJson = await updateSyncInfoState({
+        spreadsheetId: created.spreadsheetId,
+        spreadsheetUrl: created.spreadsheetUrl,
+        lastSyncedAt: nowIso,
+        autoSyncEnabled: true,
       });
-      if (syncRes.ok) {
-        const syncJson = (await syncRes.json()) as {
-          syncInfo: SpreadsheetSyncInfo;
-        };
+      if (syncJson.ok && syncJson.syncInfo) {
         onSyncInfoUpdated(syncJson.syncInfo);
       }
       setFeedback({
@@ -669,24 +600,11 @@ export function AdminDashboard({
 
     setAppsScriptBusy(true);
     try {
-      const res = await fetch('/api/admin/apps-script/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          appsScriptUrl: trimmed,
-          ...(onlyCategoryId ? { categoryId: onlyCategoryId } : {}),
-        }),
-      });
-      const data = (await res.json()) as {
-        synced?: boolean;
-        message?: string;
-        error?: string;
-        syncInfo?: SpreadsheetSyncInfo;
-      };
+      const data = await syncToAppsScript(trimmed, onlyCategoryId);
       if (data.syncInfo) {
         onSyncInfoUpdated(data.syncInfo);
       }
-      if (!res.ok || !data.synced) {
+      if (!data.ok) {
         setFeedback({
           type: 'error',
           message:
@@ -724,16 +642,10 @@ export function AdminDashboard({
     }
     setAppsScriptBusy(true);
     try {
-      const res = await fetch('/api/admin/sync-info', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appsScriptUrl: trimmed || null }),
+      const data = await updateSyncInfoState({
+        appsScriptUrl: trimmed || null,
       });
-      const data = (await res.json()) as {
-        syncInfo?: SpreadsheetSyncInfo;
-        error?: string;
-      };
-      if (!res.ok || !data.syncInfo) {
+      if (!data.ok || !data.syncInfo) {
         setFeedback({
           type: 'error',
           message: data.error || 'Gagal menyimpan URL Apps Script.',
@@ -771,22 +683,8 @@ export function AdminDashboard({
 
     setAppsScriptBusy(true);
     try {
-      const res = await fetch('/api/admin/apps-script/pull', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ appsScriptUrl: trimmed }),
-      });
-      const data = (await res.json()) as {
-        synced?: boolean;
-        needsDoGetUpdate?: boolean;
-        message?: string;
-        error?: string;
-        profile?: TeacherProfile;
-        records?: AdminRecord[];
-        games?: GameItem[];
-        syncInfo?: SpreadsheetSyncInfo;
-      };
-      if (!res.ok || !data.synced) {
+      const data = await pullFromAppsScriptClient(trimmed);
+      if (!data.ok) {
         if (data.needsDoGetUpdate) {
           setShowAppsScriptCode(true);
         }
@@ -856,15 +754,8 @@ export function AdminDashboard({
           records
         );
         const nowIso = new Date().toISOString();
-        const syncRes = await fetch('/api/admin/sync-info', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ lastSyncedAt: nowIso }),
-        });
-        if (syncRes.ok) {
-          const syncJson = (await syncRes.json()) as {
-            syncInfo: SpreadsheetSyncInfo;
-          };
+        const syncJson = await updateSyncInfoState({ lastSyncedAt: nowIso });
+        if (syncJson.ok && syncJson.syncInfo) {
           onSyncInfoUpdated(syncJson.syncInfo);
         }
         setFeedback({
@@ -1054,13 +945,16 @@ export function AdminDashboard({
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    <a
-                      href={`/api/export/csv/${activeCategoryId}`}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        triggerCategoryCsvDownload(activeCategoryId, records)
+                      }
                       className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap"
                     >
                       <Download className="h-3.5 w-3.5" />
                       Unduh CSV
-                    </a>
+                    </button>
                     <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap">
                       <Upload className="h-3.5 w-3.5" />
                       Impor CSV
@@ -1402,7 +1296,7 @@ export function AdminDashboard({
                 <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
                   <div className="h-32 w-24 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
                     <img
-                      src={photoPreview}
+                      src={resolveAppAssetUrl(photoPreview)}
                       alt="Pratinjau foto profil"
                       referrerPolicy="no-referrer"
                       className="h-full w-full object-cover object-top"
@@ -1805,7 +1699,7 @@ export function AdminDashboard({
                         <div className="aspect-video w-full overflow-hidden bg-slate-200">
                           {game.screenshotUrl ? (
                             <img
-                              src={game.screenshotUrl}
+                              src={resolveAppAssetUrl(game.screenshotUrl)}
                               alt={`Screenshot ${game.title}`}
                               referrerPolicy="no-referrer"
                               className="h-full w-full object-cover"
@@ -1965,15 +1859,10 @@ export function AdminDashboard({
                       onClick={() => {
                         setAppsScriptUrlInput('');
                         void (async () => {
-                          const res = await fetch('/api/admin/sync-info', {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ appsScriptUrl: null }),
+                          const data = await updateSyncInfoState({
+                            appsScriptUrl: null,
                           });
-                          if (res.ok) {
-                            const data = (await res.json()) as {
-                              syncInfo: SpreadsheetSyncInfo;
-                            };
+                          if (data.ok && data.syncInfo) {
                             onSyncInfoUpdated(data.syncInfo);
                             setFeedback({
                               type: 'success',
@@ -2151,17 +2040,10 @@ export function AdminDashboard({
                     <button
                       type="button"
                       onClick={async () => {
-                        const res = await fetch('/api/admin/sync-info', {
-                          method: 'PUT',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            autoSyncEnabled: !syncInfo.autoSyncEnabled,
-                          }),
+                        const data = await updateSyncInfoState({
+                          autoSyncEnabled: !syncInfo.autoSyncEnabled,
                         });
-                        if (res.ok) {
-                          const data = (await res.json()) as {
-                            syncInfo: SpreadsheetSyncInfo;
-                          };
+                        if (data.ok && data.syncInfo) {
                           onSyncInfoUpdated(data.syncInfo);
                         }
                       }}
