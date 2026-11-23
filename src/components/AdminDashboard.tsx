@@ -1,0 +1,1404 @@
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  CheckCircle2,
+  CloudUpload,
+  Download,
+  Edit3,
+  ExternalLink,
+  FileSpreadsheet,
+  FolderSync,
+  LogOut,
+  Plus,
+  RefreshCw,
+  Trash2,
+  Upload,
+  UserCheck,
+} from 'lucide-react';
+import { User as FirebaseUser } from 'firebase/auth';
+import {
+  AdminRecord,
+  CATEGORIES,
+  CATEGORY_MAP,
+  CategoryId,
+  SpreadsheetSyncInfo,
+  TeacherProfile,
+} from '../shared/categories';
+import { filterRecords, getCategoryCounts } from '../shared/spreadsheet';
+import {
+  createMasterSpreadsheet,
+  getGoogleAccessToken,
+  signInWithGoogleWorkspace,
+  signOutGoogleWorkspace,
+  syncCategoryTabToGoogleSheet,
+  uploadFileToGoogleDrive,
+} from '../services/googleWorkspace';
+import { ConfirmDialog } from './ConfirmDialog';
+
+interface AdminDashboardProps {
+  profile: TeacherProfile;
+  records: AdminRecord[];
+  syncInfo: SpreadsheetSyncInfo;
+  googleUser: FirebaseUser | null;
+  initialSection?: DashboardSection;
+  onGoogleConnected: (user: FirebaseUser) => void;
+  onGoogleDisconnected: () => void;
+  onProfileUpdated: (profile: TeacherProfile) => void;
+  onRecordsUpdated: (records: AdminRecord[]) => void;
+  onSyncInfoUpdated: (syncInfo: SpreadsheetSyncInfo) => void;
+  onSelectRecord: (record: AdminRecord) => void;
+  onLogout: () => void;
+}
+
+export type DashboardSection = CategoryId | 'profil-guru' | 'google-sheets';
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Gagal membaca berkas.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function buildEmptyForm(categoryId: CategoryId): Partial<AdminRecord> {
+  const today = new Date().toISOString().slice(0, 10);
+  return {
+    categoryId,
+    academicYear: '2026/2027',
+    semester: 'Ganjil',
+    date: today,
+    status: 'Terverifikasi',
+  };
+}
+
+export function AdminDashboard({
+  profile,
+  records,
+  syncInfo,
+  googleUser,
+  initialSection = 'berkas-tpg',
+  onGoogleConnected,
+  onGoogleDisconnected,
+  onProfileUpdated,
+  onRecordsUpdated,
+  onSyncInfoUpdated,
+  onSelectRecord,
+  onLogout,
+}: AdminDashboardProps) {
+  const [section, setSection] = useState<DashboardSection>(initialSection);
+  const [formValues, setFormValues] = useState<Partial<AdminRecord>>(() =>
+    buildEmptyForm('berkas-tpg')
+  );
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
+  // Profile editor state
+  const [profileForm, setProfileForm] = useState<TeacherProfile>(profile);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string>(profile.photoUrl);
+
+  useEffect(() => {
+    setSection(initialSection);
+  }, [initialSection]);
+
+  useEffect(() => {
+    setProfileForm(profile);
+    if (!photoFile) {
+      setPhotoPreview(profile.photoUrl);
+    }
+  }, [profile, photoFile]);
+
+  // Google Workspace state
+  const [googleBusy, setGoogleBusy] = useState(false);
+  const [confirmState, setConfirmState] = useState<{
+    open: boolean;
+    title: string;
+    description: string;
+    confirmLabel: string;
+    variant: 'danger' | 'primary';
+    action: () => Promise<void>;
+  } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const csvImportRef = useRef<HTMLInputElement | null>(null);
+
+  const counts = useMemo(() => getCategoryCounts(records), [records]);
+  const isCategorySection =
+    section !== 'profil-guru' && section !== 'google-sheets';
+  const activeCategoryId: CategoryId = isCategorySection ? section : 'berkas-tpg';
+  const activeConfig = CATEGORY_MAP[activeCategoryId];
+
+  const categoryRecords = useMemo(
+    () => records.filter((r) => r.categoryId === activeCategoryId),
+    [records, activeCategoryId]
+  );
+
+  const visibleRecords = useMemo(
+    () => filterRecords(categoryRecords, searchQuery, 'Semua'),
+    [categoryRecords, searchQuery]
+  );
+
+  const switchCategory = (catId: CategoryId) => {
+    setSection(catId);
+    setEditingId(null);
+    setAttachedFile(null);
+    setFormValues(buildEmptyForm(catId));
+    setSearchQuery('');
+    setFeedback(null);
+  };
+
+  const handleSaveRecord = async (e: FormEvent) => {
+    e.preventDefault();
+    setFeedback(null);
+    setSubmitting(true);
+
+    try {
+      let fileUpload: { fileName: string; base64Data: string } | undefined;
+      let driveMeta: { driveFileId?: string; driveViewUrl?: string } = {};
+
+      if (attachedFile) {
+        const base64Data = await fileToBase64(attachedFile);
+        fileUpload = { fileName: attachedFile.name, base64Data };
+
+        const accessToken = getGoogleAccessToken();
+        if (accessToken && syncInfo.autoSyncEnabled) {
+          const uploadedDrive = await uploadFileToGoogleDrive(
+            accessToken,
+            activeConfig.name,
+            attachedFile
+          );
+          driveMeta = {
+            driveFileId: uploadedDrive.id,
+            driveViewUrl: uploadedDrive.webViewLink,
+          };
+        }
+      }
+
+      const payload = {
+        ...formValues,
+        ...driveMeta,
+        categoryId: activeCategoryId,
+        ...(fileUpload ? { fileUpload } : {}),
+      };
+
+      const endpoint = editingId
+        ? `/api/admin/records/${editingId}`
+        : '/api/admin/records';
+      const method = editingId ? 'PUT' : 'POST';
+
+      const res = await fetch(endpoint, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = (await res.json()) as {
+        records?: AdminRecord[];
+        error?: string;
+      };
+      if (!res.ok || !data.records) {
+        setFeedback({
+          type: 'error',
+          message: data.error || 'Gagal menyimpan data ke database.',
+        });
+        return;
+      }
+
+      onRecordsUpdated(data.records);
+
+      // Real-time auto-sync to Google Sheets if connected & spreadsheet exists
+      const accessToken = getGoogleAccessToken();
+      let syncMsg = '';
+      if (accessToken && syncInfo.spreadsheetId && syncInfo.autoSyncEnabled) {
+        await syncCategoryTabToGoogleSheet(
+          accessToken,
+          syncInfo.spreadsheetId,
+          activeCategoryId,
+          data.records
+        );
+        const nowIso = new Date().toISOString();
+        const syncRes = await fetch('/api/admin/sync-info', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lastSyncedAt: nowIso }),
+        });
+        if (syncRes.ok) {
+          const syncJson = (await syncRes.json()) as {
+            syncInfo: SpreadsheetSyncInfo;
+          };
+          onSyncInfoUpdated(syncJson.syncInfo);
+        }
+        syncMsg = ' & tersinkron real-time ke Google Sheets';
+      }
+
+      setFeedback({
+        type: 'success',
+        message: editingId
+          ? `Data ${activeConfig.name} berhasil diperbarui${syncMsg}.`
+          : `Data & berkas baru berhasil diunggah otomatis ke tab ${activeConfig.name}${syncMsg}.`,
+      });
+      setEditingId(null);
+      setAttachedFile(null);
+      setFormValues(buildEmptyForm(activeCategoryId));
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Terjadi kesalahan saat mengunggah data.',
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const requestDeleteRecord = (record: AdminRecord) => {
+    setConfirmState({
+      open: true,
+      title: `Hapus "${record.studentName || record.title}"?`,
+      description: `Baris data dari kategori ${activeConfig.name} ini akan dihapus permanen dari database lokal${
+        syncInfo.spreadsheetId
+          ? ' dan diperbarui pada tab Google Sheets terkait'
+          : ''
+      }.`,
+      confirmLabel: 'Ya, Hapus Data',
+      variant: 'danger',
+      action: async () => {
+        const res = await fetch(`/api/admin/records/${record.id}`, {
+          method: 'DELETE',
+        });
+        const data = (await res.json()) as {
+          records?: AdminRecord[];
+          error?: string;
+        };
+        if (!res.ok || !data.records) {
+          throw new Error(data.error || 'Gagal menghapus data.');
+        }
+        onRecordsUpdated(data.records);
+
+        const accessToken = getGoogleAccessToken();
+        if (accessToken && syncInfo.spreadsheetId && syncInfo.autoSyncEnabled) {
+          await syncCategoryTabToGoogleSheet(
+            accessToken,
+            syncInfo.spreadsheetId,
+            activeCategoryId,
+            data.records
+          );
+        }
+        setFeedback({
+          type: 'success',
+          message: 'Baris data berhasil dihapus dari database spreadsheet.',
+        });
+      },
+    });
+  };
+
+  const handleSaveProfile = async (e: FormEvent) => {
+    e.preventDefault();
+    setFeedback(null);
+    setSubmitting(true);
+    try {
+      let photoUpload: { fileName: string; base64Data: string } | undefined;
+      if (photoFile) {
+        const base64Data = await fileToBase64(photoFile);
+        photoUpload = { fileName: photoFile.name, base64Data };
+      }
+
+      const res = await fetch('/api/admin/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...profileForm,
+          ...(photoUpload ? { photoUpload } : {}),
+        }),
+      });
+      const data = (await res.json()) as {
+        profile?: TeacherProfile;
+        error?: string;
+      };
+      if (!res.ok || !data.profile) {
+        setFeedback({
+          type: 'error',
+          message: data.error || 'Gagal memperbarui profil guru.',
+        });
+        return;
+      }
+      onProfileUpdated(data.profile);
+      setProfileForm(data.profile);
+      setPhotoPreview(data.profile.photoUrl);
+      setPhotoFile(null);
+      setFeedback({
+        type: 'success',
+        message: 'Profil dan foto guru pada halaman depan berhasil diperbarui.',
+      });
+    } catch {
+      setFeedback({
+        type: 'error',
+        message: 'Gagal menyimpan perubahan profil.',
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCsvFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const csvText = String(reader.result || '');
+      setConfirmState({
+        open: true,
+        title: `Impor CSV ke ${activeConfig.name}?`,
+        description: `Data dari berkas "${file.name}" akan ditambahkan ke dalam tabel kategori ${activeConfig.name}.`,
+        confirmLabel: 'Impor Sekarang',
+        variant: 'primary',
+        action: async () => {
+          const res = await fetch(`/api/admin/import/${activeCategoryId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ csvText }),
+          });
+          const data = (await res.json()) as {
+            importedCount?: number;
+            records?: AdminRecord[];
+            error?: string;
+          };
+          if (!res.ok || !data.records) {
+            throw new Error(data.error || 'Gagal mengimpor berkas CSV.');
+          }
+          onRecordsUpdated(data.records);
+          setFeedback({
+            type: 'success',
+            message: `${data.importedCount} baris data dari CSV berhasil diimpor ke ${activeConfig.name}.`,
+          });
+        },
+      });
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleGoogleLogin = async () => {
+    setFeedback(null);
+    setGoogleBusy(true);
+    try {
+      const result = await signInWithGoogleWorkspace();
+      onGoogleConnected(result.user);
+      const syncRes = await fetch('/api/admin/sync-info', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ connectedEmail: result.user.email || null }),
+      });
+      if (syncRes.ok) {
+        const syncJson = (await syncRes.json()) as {
+          syncInfo: SpreadsheetSyncInfo;
+        };
+        onSyncInfoUpdated(syncJson.syncInfo);
+      }
+      setFeedback({
+        type: 'success',
+        message: `Akun Google (${result.user.email}) terhubung untuk Google Sheets & Google Drive.`,
+      });
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        message:
+          err instanceof Error
+            ? err.message
+            : 'Gagal menghubungkan akun Google Workspace.',
+      });
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
+
+  const handleCreateGoogleSpreadsheet = async () => {
+    const token = getGoogleAccessToken();
+    if (!token) {
+      setFeedback({
+        type: 'error',
+        message: 'Silakan klik "Sign in with Google" terlebih dahulu.',
+      });
+      return;
+    }
+    setGoogleBusy(true);
+    setFeedback(null);
+    try {
+      const created = await createMasterSpreadsheet(token, profile, records);
+      const nowIso = new Date().toISOString();
+      const syncRes = await fetch('/api/admin/sync-info', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          spreadsheetId: created.spreadsheetId,
+          spreadsheetUrl: created.spreadsheetUrl,
+          lastSyncedAt: nowIso,
+          autoSyncEnabled: true,
+        }),
+      });
+      if (syncRes.ok) {
+        const syncJson = (await syncRes.json()) as {
+          syncInfo: SpreadsheetSyncInfo;
+        };
+        onSyncInfoUpdated(syncJson.syncInfo);
+      }
+      setFeedback({
+        type: 'success',
+        message:
+          'Google Spreadsheet 9 kategori + Profil Guru berhasil dibuat dan diisi secara otomatis!',
+      });
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        message:
+          err instanceof Error ? err.message : 'Gagal membuat Google Spreadsheet.',
+      });
+    } finally {
+      setGoogleBusy(false);
+    }
+  };
+
+  const requestSyncCategoryToSheets = () => {
+    const token = getGoogleAccessToken();
+    if (!token || !syncInfo.spreadsheetId) {
+      setFeedback({
+        type: 'error',
+        message:
+          'Pastikan Anda sudah Sign in with Google dan membuat Spreadsheet terlebih dahulu.',
+      });
+      return;
+    }
+
+    setConfirmState({
+      open: true,
+      title: `Sinkronkan Tab ${activeConfig.name}?`,
+      description: `Data pada tab "${activeConfig.sheetTabName}" di Google Spreadsheet Anda akan diperbarui agar sama persis dengan ${categoryRecords.length} baris data terbaru.`,
+      confirmLabel: 'Ya, Sinkronkan Tab',
+      variant: 'primary',
+      action: async () => {
+        await syncCategoryTabToGoogleSheet(
+          token,
+          syncInfo.spreadsheetId!,
+          activeCategoryId,
+          records
+        );
+        const nowIso = new Date().toISOString();
+        const syncRes = await fetch('/api/admin/sync-info', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ lastSyncedAt: nowIso }),
+        });
+        if (syncRes.ok) {
+          const syncJson = (await syncRes.json()) as {
+            syncInfo: SpreadsheetSyncInfo;
+          };
+          onSyncInfoUpdated(syncJson.syncInfo);
+        }
+        setFeedback({
+          type: 'success',
+          message: `Tab ${activeConfig.sheetTabName} berhasil disinkronkan ke Google Sheets.`,
+        });
+      },
+    });
+  };
+
+  const executeConfirmedAction = async () => {
+    if (!confirmState) return;
+    setConfirmBusy(true);
+    try {
+      await confirmState.action();
+      setConfirmState(null);
+    } catch (err) {
+      setFeedback({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Operasi gagal dijalankan.',
+      });
+      setConfirmState(null);
+    } finally {
+      setConfirmBusy(false);
+    }
+  };
+
+  return (
+    <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
+        {/* Sidebar Navigation */}
+        <aside className="lg:col-span-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4 lg:sticky lg:top-20">
+            <div className="border-b border-slate-200 pb-4">
+              <p className="text-xs font-semibold text-[#0F6B4E]">
+                Dashboard Admin Terintegrasi
+              </p>
+              <p className="mt-1 truncate text-sm font-bold text-slate-900">
+                {profile.fullName}
+              </p>
+              <p className="text-xs text-slate-500">User: gpai</p>
+            </div>
+
+            <nav aria-label="Menu Admin" className="mt-4 space-y-1">
+              <p className="px-2.5 pb-1 text-xs font-semibold text-slate-400">
+                Identitas &amp; Sinkronisasi
+              </p>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSection('profil-guru');
+                  setFeedback(null);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-semibold transition-colors ${
+                  section === 'profil-guru'
+                    ? 'bg-[#0F6B4E] text-white'
+                    : 'bg-slate-50 text-slate-800 hover:bg-slate-100'
+                }`}
+              >
+                <UserCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>Ubah Nama, NIP &amp; Foto</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSection('google-sheets');
+                  setFeedback(null);
+                }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium transition-colors ${
+                  section === 'google-sheets'
+                    ? 'bg-[#0F6B4E] text-white'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <FileSpreadsheet className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>Database Google Sheets</span>
+              </button>
+
+              <div className="my-3 border-t border-slate-200" />
+              <p className="px-2.5 pb-1 text-xs font-semibold text-slate-400">
+                9 Kategori Administrasi
+              </p>
+              {CATEGORIES.map((cat) => {
+                const active = section === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => switchCategory(cat.id)}
+                    className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs font-medium transition-colors ${
+                      active
+                        ? 'bg-[#0F6B4E] text-white'
+                        : 'text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className="truncate">
+                      {cat.order}. {cat.name}
+                    </span>
+                    <span
+                      className={`ml-2 font-mono tabular-nums ${
+                        active ? 'text-emerald-100' : 'text-slate-400'
+                      }`}
+                    >
+                      {counts[cat.id]}
+                    </span>
+                  </button>
+                );
+              })}
+
+              <div className="pt-3">
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition-colors hover:bg-slate-50"
+                >
+                  <LogOut className="h-3.5 w-3.5" aria-hidden="true" />
+                  Keluar Dashboard
+                </button>
+              </div>
+            </nav>
+          </div>
+        </aside>
+
+        {/* Main Admin Workspace */}
+        <section className="space-y-6 lg:col-span-9">
+          {feedback && (
+            <div
+              role={feedback.type === 'error' ? 'alert' : 'status'}
+              className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-sm font-medium ${
+                feedback.type === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                  : 'border-red-200 bg-red-50 text-red-800'
+              }`}
+            >
+              <span>{feedback.message}</span>
+              <button
+                type="button"
+                onClick={() => setFeedback(null)}
+                className="text-xs font-semibold underline"
+              >
+                Tutup
+              </button>
+            </div>
+          )}
+
+          {/* Category Upload + Spreadsheet Management */}
+          {isCategorySection && (
+            <>
+              <div className="rounded-2xl border border-slate-200 bg-white p-6">
+                <div className="flex flex-col justify-between gap-4 border-b border-slate-200 pb-5 sm:flex-row sm:items-center">
+                  <div>
+                    <p className="text-xs font-semibold text-[#0F6B4E]">
+                      Tab Spreadsheet: {activeConfig.sheetTabName}
+                    </p>
+                    <h1 className="mt-1 font-display text-2xl font-bold text-slate-900">
+                      {activeConfig.order}. {activeConfig.name}
+                    </h1>
+                    <p className="mt-1 text-xs text-slate-600">
+                      {activeConfig.shortDesc}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <a
+                      href={`/api/export/csv/${activeCategoryId}`}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Unduh CSV
+                    </a>
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap">
+                      <Upload className="h-3.5 w-3.5" />
+                      Impor CSV
+                      <input
+                        ref={csvImportRef}
+                        type="file"
+                        accept=".csv,text/csv"
+                        onChange={handleCsvFileSelect}
+                        className="sr-only"
+                      />
+                    </label>
+                    {syncInfo.spreadsheetId && googleUser && (
+                      <button
+                        type="button"
+                        onClick={requestSyncCategoryToSheets}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        Sinkron Google Sheets
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Upload & Entry Form */}
+                <form onSubmit={handleSaveRecord} className="mt-6 space-y-5">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-bold text-slate-900">
+                      {editingId
+                        ? 'Edit Baris Data Administrasi'
+                        : `Unggah & Tambah Otomatis ke ${activeConfig.name}`}
+                    </h2>
+                    {editingId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditingId(null);
+                          setFormValues(buildEmptyForm(activeCategoryId));
+                          setAttachedFile(null);
+                        }}
+                        className="text-xs font-semibold text-slate-600 hover:underline"
+                      >
+                        Batal Edit
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    {activeConfig.fields.map((field) => {
+                      const fieldId = `field-${activeCategoryId}-${String(field.key)}`;
+                      const rawValue = formValues[field.key];
+                      const value =
+                        rawValue !== undefined && rawValue !== null
+                          ? String(rawValue)
+                          : '';
+
+                      if (field.type === 'textarea') {
+                        return (
+                          <div key={String(field.key)} className="sm:col-span-2">
+                            <label
+                              htmlFor={fieldId}
+                              className="block text-xs font-semibold text-slate-700"
+                            >
+                              {field.label}
+                              {field.required && (
+                                <span className="text-red-600"> *</span>
+                              )}
+                            </label>
+                            <textarea
+                              id={fieldId}
+                              rows={3}
+                              value={value}
+                              onChange={(e) =>
+                                setFormValues((prev) => ({
+                                  ...prev,
+                                  [field.key]: e.target.value,
+                                }))
+                              }
+                              placeholder={field.placeholder}
+                              className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#0F6B4E] focus:outline-none focus:ring-2 focus:ring-[#0F6B4E]/15"
+                            />
+                          </div>
+                        );
+                      }
+
+                      if (field.type === 'select') {
+                        return (
+                          <div key={String(field.key)}>
+                            <label
+                              htmlFor={fieldId}
+                              className="block text-xs font-semibold text-slate-700"
+                            >
+                              {field.label}
+                              {field.required && (
+                                <span className="text-red-600"> *</span>
+                              )}
+                            </label>
+                            <select
+                              id={fieldId}
+                              value={value || field.options?.[0] || ''}
+                              onChange={(e) =>
+                                setFormValues((prev) => ({
+                                  ...prev,
+                                  [field.key]: e.target.value,
+                                }))
+                              }
+                              className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none focus:ring-2 focus:ring-[#0F6B4E]/15"
+                            >
+                              {field.options?.map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div key={String(field.key)}>
+                          <label
+                            htmlFor={fieldId}
+                            className="block text-xs font-semibold text-slate-700"
+                          >
+                            {field.label}
+                            {field.required && (
+                              <span className="text-red-600"> *</span>
+                            )}
+                          </label>
+                          <input
+                            id={fieldId}
+                            type={field.type}
+                            value={value}
+                            onChange={(e) =>
+                              setFormValues((prev) => ({
+                                ...prev,
+                                [field.key]:
+                                  field.type === 'number'
+                                    ? e.target.value === ''
+                                      ? undefined
+                                      : Number(e.target.value)
+                                    : e.target.value,
+                              }))
+                            }
+                            placeholder={field.placeholder}
+                            className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#0F6B4E] focus:outline-none focus:ring-2 focus:ring-[#0F6B4E]/15"
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Auto-Upload File Attachment Box */}
+                  <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-4">
+                    <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
+                      <div className="flex items-center gap-3">
+                        <CloudUpload
+                          className="h-5 w-5 shrink-0 text-[#0F6B4E]"
+                          aria-hidden="true"
+                        />
+                        <div>
+                          <p className="text-xs font-semibold text-slate-800">
+                            Lampiran Berkas Otomatis (PDF, DOCX, XLSX, Gambar)
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {attachedFile
+                              ? `Terpilih: ${attachedFile.name}`
+                              : formValues.fileName
+                              ? `Berkas tersimpan: ${formValues.fileName}`
+                              : 'Berkas tersimpan ke server dan otomatis diunggah ke Google Drive jika terhubung.'}
+                          </p>
+                        </div>
+                      </div>
+                      <label className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 whitespace-nowrap shrink-0">
+                        Pilih Berkas
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg"
+                          onChange={(e) =>
+                            setAttachedFile(e.target.files?.[0] || null)
+                          }
+                          className="sr-only"
+                        />
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-3">
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="inline-flex items-center gap-2 rounded-lg bg-[#0F6B4E] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#0B533C] disabled:opacity-60 whitespace-nowrap shrink-0"
+                    >
+                      <Plus className="h-4 w-4" aria-hidden="true" />
+                      {submitting
+                        ? 'Menyimpan & Menyinkronkan...'
+                        : editingId
+                        ? 'Simpan Perubahan'
+                        : 'Simpan & Unggah ke Spreadsheet'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              {/* Live Spreadsheet Table for Category */}
+              <div className="rounded-2xl border border-slate-200 bg-white">
+                <div className="flex flex-col justify-between gap-3 border-b border-slate-200 p-5 sm:flex-row sm:items-center">
+                  <h2 className="text-sm font-bold text-slate-900">
+                    Tabel Data Spreadsheet — {activeConfig.name} ({visibleRecords.length})
+                  </h2>
+                  <input
+                    type="search"
+                    aria-label="Filter tabel admin"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Cari baris..."
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs text-slate-900 sm:w-64 focus:border-[#0F6B4E] focus:outline-none"
+                  />
+                </div>
+
+                {visibleRecords.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-slate-500">
+                    Belum ada data pada kategori ini. Gunakan formulir di atas untuk
+                    menambah dokumen pertama.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-200 bg-slate-50 text-slate-600">
+                          {activeConfig.tableColumns.map((col) => (
+                            <th
+                              key={String(col.key)}
+                              className={`px-4 py-3 font-semibold ${
+                                col.align === 'right' ? 'text-right' : 'text-left'
+                              }`}
+                            >
+                              {col.label}
+                            </th>
+                          ))}
+                          <th className="px-4 py-3 text-right font-semibold">
+                            Berkas &amp; Aksi
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {visibleRecords.map((row) => (
+                          <tr key={row.id} className="hover:bg-slate-50/70">
+                            {activeConfig.tableColumns.map((col) => (
+                              <td
+                                key={String(col.key)}
+                                className={`px-4 py-3 text-slate-700 ${
+                                  col.align === 'right' ? 'text-right' : 'text-left'
+                                } ${col.mono ? 'font-mono tabular-nums whitespace-nowrap' : ''} ${
+                                  col.key === 'title' || col.key === 'studentName'
+                                    ? 'font-semibold text-slate-900'
+                                    : ''
+                                }`}
+                              >
+                                {row[col.key] !== undefined && row[col.key] !== ''
+                                  ? String(row[col.key])
+                                  : '-'}
+                                {(col.key === 'title' || col.key === 'studentName') &&
+                                  row.fileName && (
+                                    <span className="mt-0.5 block text-[11px] font-normal text-slate-500">
+                                      Berkas: {row.fileName}
+                                    </span>
+                                  )}
+                              </td>
+                            ))}
+                            <td className="px-4 py-3 text-right">
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => onSelectRecord(row)}
+                                  className="rounded border border-slate-200 px-2 py-1 font-medium text-slate-700 hover:bg-slate-100"
+                                >
+                                  Lihat
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label={`Edit ${row.studentName || row.title}`}
+                                  onClick={() => {
+                                    setEditingId(row.id);
+                                    setFormValues({ ...row });
+                                    setAttachedFile(null);
+                                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                                  }}
+                                  className="rounded border border-slate-200 p-1.5 text-slate-600 hover:border-[#0F6B4E] hover:text-[#0F6B4E]"
+                                >
+                                  <Edit3 className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label={`Hapus ${row.studentName || row.title}`}
+                                  onClick={() => requestDeleteRecord(row)}
+                                  className="rounded border border-slate-200 p-1.5 text-red-600 hover:border-red-300 hover:bg-red-50"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Profile & Photo Editor */}
+          {section === 'profil-guru' && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-6">
+              <div className="border-b border-slate-200 pb-4">
+                <h1 className="font-display text-2xl font-bold text-slate-900">
+                  Profil &amp; Foto Guru Halaman Depan
+                </h1>
+                <p className="mt-1 text-xs text-slate-600">
+                  Perubahan foto profil dan biodata langsung tampil pada halaman depan
+                  website profesional Anda.
+                </p>
+              </div>
+
+              <form onSubmit={handleSaveProfile} className="mt-6 space-y-5">
+                <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
+                  <div className="h-32 w-24 shrink-0 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
+                    <img
+                      src={photoPreview}
+                      alt="Pratinjau foto profil"
+                      referrerPolicy="no-referrer"
+                      className="h-full w-full object-cover object-top"
+                    />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900">
+                      Foto Profil Utama
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Gunakan foto formal/batik beresolusi baik (rasio potret 3:4 atau
+                      persegi).
+                    </p>
+                    <label className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50">
+                      <Upload className="h-3.5 w-3.5" />
+                      Ganti Foto Profil
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          setPhotoFile(file);
+                          setPhotoPreview(URL.createObjectURL(file));
+                        }}
+                        className="sr-only"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label
+                      htmlFor="prof-name"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Nama Lengkap &amp; Gelar *
+                    </label>
+                    <input
+                      id="prof-name"
+                      type="text"
+                      value={profileForm.fullName}
+                      onChange={(e) =>
+                        setProfileForm((p) => ({ ...p, fullName: e.target.value }))
+                      }
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="prof-role"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Jabatan / Mata Pelajaran
+                    </label>
+                    <input
+                      id="prof-role"
+                      type="text"
+                      value={profileForm.titleRole}
+                      onChange={(e) =>
+                        setProfileForm((p) => ({ ...p, titleRole: e.target.value }))
+                      }
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="prof-school"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Unit Kerja / Sekolah
+                    </label>
+                    <input
+                      id="prof-school"
+                      type="text"
+                      value={profileForm.schoolName}
+                      onChange={(e) =>
+                        setProfileForm((p) => ({ ...p, schoolName: e.target.value }))
+                      }
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="prof-nip"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      NIP
+                    </label>
+                    <input
+                      id="prof-nip"
+                      type="text"
+                      value={profileForm.nip}
+                      onChange={(e) =>
+                        setProfileForm((p) => ({ ...p, nip: e.target.value }))
+                      }
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="prof-nuptk"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      NUPTK
+                    </label>
+                    <input
+                      id="prof-nuptk"
+                      type="text"
+                      value={profileForm.nuptk}
+                      onChange={(e) =>
+                        setProfileForm((p) => ({ ...p, nuptk: e.target.value }))
+                      }
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3.5 py-2 font-mono text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="prof-email"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Email Resmi
+                    </label>
+                    <input
+                      id="prof-email"
+                      type="email"
+                      value={profileForm.email}
+                      onChange={(e) =>
+                        setProfileForm((p) => ({ ...p, email: e.target.value }))
+                      }
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="prof-cert"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Nomor Sertifikasi / NRG
+                    </label>
+                    <input
+                      id="prof-cert"
+                      type="text"
+                      value={profileForm.certificationNumber}
+                      onChange={(e) =>
+                        setProfileForm((p) => ({
+                          ...p,
+                          certificationNumber: e.target.value,
+                        }))
+                      }
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="prof-location"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Lokasi / Kecamatan &amp; Kabupaten
+                    </label>
+                    <input
+                      id="prof-location"
+                      type="text"
+                      value={profileForm.location}
+                      onChange={(e) =>
+                        setProfileForm((p) => ({ ...p, location: e.target.value }))
+                      }
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label
+                      htmlFor="prof-bio"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Ringkasan Profil Profesional
+                    </label>
+                    <textarea
+                      id="prof-bio"
+                      rows={3}
+                      value={profileForm.bio}
+                      onChange={(e) =>
+                        setProfileForm((p) => ({ ...p, bio: e.target.value }))
+                      }
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label
+                      htmlFor="prof-quote"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Motto Pendidik
+                    </label>
+                    <input
+                      id="prof-quote"
+                      type="text"
+                      value={profileForm.quote}
+                      onChange={(e) =>
+                        setProfileForm((p) => ({ ...p, quote: e.target.value }))
+                      }
+                      className="mt-1.5 w-full rounded-lg border border-slate-300 px-3.5 py-2 text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end">
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="rounded-lg bg-[#0F6B4E] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#0B533C] disabled:opacity-60"
+                  >
+                    {submitting ? 'Menyimpan...' : 'Simpan Profil Guru'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* Google Sheets & Google Drive Real-Time Integration */}
+          {section === 'google-sheets' && (
+            <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6">
+              <div className="border-b border-slate-200 pb-4">
+                <h1 className="font-display text-2xl font-bold text-slate-900">
+                  Integrasi Database Google Sheets &amp; Google Drive
+                </h1>
+                <p className="mt-1 text-xs text-slate-600">
+                  Hubungkan akun Google Anda agar setiap pengunggahan dokumen pada 9
+                  kategori otomatis membuat berkas di Google Drive dan memperbarui
+                  baris spreadsheet secara real-time.
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-5">
+                <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+                  <div>
+                    <p className="text-sm font-bold text-slate-900">
+                      Status Koneksi Google Workspace
+                    </p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      {googleUser
+                        ? `Terhubung sebagai ${googleUser.email}`
+                        : 'Belum masuk ke Google Workspace pada sesi browser ini.'}
+                    </p>
+                  </div>
+
+                  {!googleUser ? (
+                    <button
+                      type="button"
+                      onClick={handleGoogleLogin}
+                      disabled={googleBusy}
+                      className="gsi-material-button shrink-0"
+                    >
+                      <span className="gsi-material-button-icon">
+                        <svg
+                          version="1.1"
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 48 48"
+                          style={{ display: 'block' }}
+                        >
+                          <path
+                            fill="#EA4335"
+                            d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+                          />
+                          <path
+                            fill="#4285F4"
+                            d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+                          />
+                          <path
+                            fill="#FBBC05"
+                            d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+                          />
+                          <path
+                            fill="#34A853"
+                            d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+                          />
+                          <path fill="none" d="M0 0h48v48H0z" />
+                        </svg>
+                      </span>
+                      <span>
+                        {googleBusy ? 'Menghubungkan...' : 'Sign in with Google'}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await signOutGoogleWorkspace();
+                        onGoogleDisconnected();
+                      }}
+                      className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                      Putuskan Sesi Google
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div className="rounded-xl border border-slate-200 p-5">
+                  <p className="text-xs font-semibold text-slate-500">
+                    Spreadsheet Master (9 Tab Kategori)
+                  </p>
+                  <p className="mt-1.5 text-sm font-bold text-slate-900">
+                    {syncInfo.spreadsheetId
+                      ? 'Spreadsheet Terhubung & Aktif'
+                      : 'Belum Ada Spreadsheet Google Terhubung'}
+                  </p>
+                  {syncInfo.spreadsheetId && (
+                    <p className="mt-1 truncate font-mono text-xs text-slate-500">
+                      ID: {syncInfo.spreadsheetId}
+                    </p>
+                  )}
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={!googleUser || googleBusy}
+                      onClick={handleCreateGoogleSpreadsheet}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#0F6B4E] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0B533C] disabled:opacity-50"
+                    >
+                      <FolderSync className="h-3.5 w-3.5" />
+                      {syncInfo.spreadsheetId
+                        ? 'Buat Spreadsheet Baru'
+                        : 'Buat Spreadsheet 9 Tab Otomatis'}
+                    </button>
+                    {syncInfo.spreadsheetUrl && (
+                      <a
+                        href={syncInfo.spreadsheetUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        Buka Google Sheets
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 p-5">
+                  <p className="text-xs font-semibold text-slate-500">
+                    Unggah &amp; Sinkronisasi Otomatis Real-Time
+                  </p>
+                  <div className="mt-2 flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1.5 text-sm font-bold text-slate-900">
+                      <CheckCircle2 className="h-4 w-4 text-[#0F6B4E]" />
+                      {syncInfo.autoSyncEnabled ? 'Aktif Otomatis' : 'Manual'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const res = await fetch('/api/admin/sync-info', {
+                          method: 'PUT',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            autoSyncEnabled: !syncInfo.autoSyncEnabled,
+                          }),
+                        });
+                        if (res.ok) {
+                          const data = (await res.json()) as {
+                            syncInfo: SpreadsheetSyncInfo;
+                          };
+                          onSyncInfoUpdated(data.syncInfo);
+                        }
+                      }}
+                      className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                    >
+                      {syncInfo.autoSyncEnabled ? 'Matikan Auto' : 'Aktifkan Auto'}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    {syncInfo.lastSyncedAt
+                      ? `Sinkronisasi terakhir: ${new Date(
+                          syncInfo.lastSyncedAt
+                        ).toLocaleString('id-ID')}`
+                      : 'Unduhan langsung Excel (.xls 9 tab) dan CSV per kategori tetap selalu tersedia.'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
+      </div>
+
+      <ConfirmDialog
+        open={Boolean(confirmState?.open)}
+        title={confirmState?.title || ''}
+        description={confirmState?.description || ''}
+        confirmLabel={confirmState?.confirmLabel || 'Konfirmasi'}
+        variant={confirmState?.variant || 'primary'}
+        busy={confirmBusy}
+        onConfirm={executeConfirmedAction}
+        onCancel={() => setConfirmState(null)}
+      />
+    </div>
+  );
+}

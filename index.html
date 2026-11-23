@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        var isExtensionSource = function (src) {
+          return typeof src === 'string' && src.indexOf('chrome-extension://') === 0;
+        };
+        var isExtensionStack = function (err) {
+          return Boolean(err && typeof err.stack === 'string' && err.stack.indexOf('chrome-extension://') !== -1);
+        };
+        window.addEventListener(
+          'error',
+          function (event) {
+            if (isExtensionSource(event.filename) || isExtensionStack(event.error)) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          },
+          true,
+        );
+        window.addEventListener(
+          'unhandledrejection',
+          function (event) {
+            if (isExtensionStack(event.reason)) {
+              event.preventDefault();
+              event.stopImmediatePropagation();
+            }
+          },
+          true,
+        );
+      })();
+    </script>
+    <title>Portal Administrasi GPAI — Portofolio & Dokumen Guru</title>
+    <meta
+      name="description"
+      content="Website profesional dan dashboard administrasi Guru Pendidikan Agama Islam (GPAI) terintegrasi database spreadsheet real-time untuk Berkas TPG, Program Ajar, KBM, Asesmen, dan Rapor Tahfidz Juz 30."
+    />
+    <meta property="og:title" content="Portal Administrasi GPAI — Portofolio & Dokumen Guru" />
+    <meta
+      property="og:description"
+      content="Portal manajemen dokumen administrasi Guru Pendidikan Agama Islam (GPAI) terintegrasi spreadsheet real-time."
+    />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body class="bg-[#F8F9FA] text-[#0F172A] antialiased selection:bg-[#0F6B4E]/15 selection:text-[#0B533C]">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

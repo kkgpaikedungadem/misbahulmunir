@@ -1,0 +1,8 @@
+{
+  "name": "Portal Administrasi GPAI",
+  "description": "Website profesional dan dashboard administrasi Guru Pendidikan Agama Islam (GPAI) terintegrasi database spreadsheet real-time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
