@@ -609,7 +609,9 @@ export function parseAppsScriptResponse(
         updatedAt: kv.get('Diperbarui') || fallbackProfile.updatedAt,
         bio: kv.get('Bio') || fallbackProfile.bio,
         quote: kv.get('Motto') || fallbackProfile.quote,
-        photoUrl: kv.get('Foto URL') || fallbackProfile.photoUrl,
+        photoUrl:
+          normalizeExternalPhotoUrl(kv.get('Foto URL') || '') ||
+          fallbackProfile.photoUrl,
       };
     }
   }

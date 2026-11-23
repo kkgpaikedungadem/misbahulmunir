@@ -1,9 +1,11 @@
 import {
+  DEFAULT_APPS_SCRIPT_URL,
   DEFAULT_GAMES,
   DEFAULT_PROFILE,
   DEFAULT_SYNC_INFO,
   SEED_RECORDS,
 } from '../data/seedData';
+import { compressImageDataUrlToLimit } from '../utils/imageCompression';
 import {
   AdminRecord,
   CATEGORY_MAP,
@@ -61,16 +63,33 @@ function formatBase64Size(base64Data: string): string {
     : `${Math.max(1, Math.round(sizeKb))} KB`;
 }
 
+function sanitizeStaticAssetUrl(url: string, fallback: string): string {
+  const resolved = resolveAppAssetUrl(url);
+  if (
+    detectedBackendMode === 'static' &&
+    resolved.startsWith('/api/uploads/')
+  ) {
+    return resolveAppAssetUrl(fallback);
+  }
+  return resolved;
+}
+
 function normalizeStateAssets(state: PortalState): PortalState {
   return {
     ...state,
     profile: {
       ...state.profile,
-      photoUrl: resolveAppAssetUrl(state.profile.photoUrl),
+      photoUrl: sanitizeStaticAssetUrl(
+        state.profile.photoUrl,
+        DEFAULT_PROFILE.photoUrl
+      ),
     },
     games: (state.games || []).map((g) => ({
       ...g,
-      screenshotUrl: resolveAppAssetUrl(g.screenshotUrl),
+      screenshotUrl: sanitizeStaticAssetUrl(
+        g.screenshotUrl,
+        DEFAULT_GAMES[0]?.screenshotUrl || ''
+      ),
     })),
   };
 }
@@ -78,12 +97,13 @@ function normalizeStateAssets(state: PortalState): PortalState {
 function readStaticDb(): PortalState {
   const fallbackScriptUrl = isValidAppsScriptUrl(ENV_VITE_APPS_SCRIPT_URL)
     ? ENV_VITE_APPS_SCRIPT_URL
-    : null;
+    : DEFAULT_APPS_SCRIPT_URL;
 
   try {
     const raw = window.localStorage.getItem(STATIC_DB_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<PortalState>;
+      const disconnectedByUser = Boolean(parsed.syncInfo?.disconnectedByUser);
       return normalizeStateAssets({
         profile: parsed.profile || DEFAULT_PROFILE,
         records: Array.isArray(parsed.records) ? parsed.records : SEED_RECORDS,
@@ -91,7 +111,9 @@ function readStaticDb(): PortalState {
         syncInfo: {
           ...DEFAULT_SYNC_INFO,
           ...(parsed.syncInfo || {}),
-          appsScriptUrl: parsed.syncInfo?.appsScriptUrl || fallbackScriptUrl,
+          appsScriptUrl: disconnectedByUser
+            ? parsed.syncInfo?.appsScriptUrl || null
+            : parsed.syncInfo?.appsScriptUrl || fallbackScriptUrl,
         },
       });
     }
@@ -243,10 +265,14 @@ async function pullAppsScriptFromBrowser(
 
   try {
     const separator = url.includes('?') ? '&' : '?';
-    const res = await fetch(`${url.trim()}${separator}action=getAll`, {
-      method: 'GET',
-      redirect: 'follow',
-    });
+    const res = await fetch(
+      `${url.trim()}${separator}action=getAll&_t=${Date.now()}`,
+      {
+        method: 'GET',
+        cache: 'no-store',
+        redirect: 'follow',
+      }
+    );
     const rawText = await res.text();
     const trimmed = rawText.trim();
     if (
@@ -437,6 +463,7 @@ export async function saveTeacherProfile(
   ok: boolean;
   profile?: TeacherProfile;
   syncInfo?: SpreadsheetSyncInfo;
+  appsScriptSync?: { ok: boolean; message: string };
   error?: string;
 }> {
   const api = await tryApiFetch('/api/admin/profile', {
@@ -452,6 +479,7 @@ export async function saveTeacherProfile(
     const data = api.json as {
       profile?: TeacherProfile;
       syncInfo?: SpreadsheetSyncInfo;
+      appsScriptSync?: { ok: boolean; message: string };
       error?: string;
     };
     if (!api.response.ok || !data.profile) {
@@ -460,7 +488,12 @@ export async function saveTeacherProfile(
         error: data.error || 'Gagal memperbarui profil guru.',
       };
     }
-    return { ok: true, profile: data.profile, syncInfo: data.syncInfo };
+    return {
+      ok: true,
+      profile: data.profile,
+      syncInfo: data.syncInfo,
+      appsScriptSync: data.appsScriptSync,
+    };
   }
 
   if (!profileForm.fullName || !profileForm.fullName.trim()) {
@@ -468,11 +501,19 @@ export async function saveTeacherProfile(
   }
 
   const db = readStaticDb();
-  const nextPhotoUrl = photoUpload?.base64Data
+  let nextPhotoUrl = photoUpload?.base64Data
     ? photoUpload.base64Data
     : profileForm.photoUrl
       ? normalizeExternalPhotoUrl(profileForm.photoUrl)
       : db.profile.photoUrl;
+
+  if (nextPhotoUrl.startsWith('data:image/') && nextPhotoUrl.length > 42000) {
+    nextPhotoUrl = await compressImageDataUrlToLimit(nextPhotoUrl, {
+      maxWidth: 420,
+      maxHeight: 540,
+      maxChars: 38000,
+    });
+  }
 
   const updatedProfile: TeacherProfile = {
     ...db.profile,
@@ -491,12 +532,13 @@ export async function saveTeacherProfile(
   };
 
   let nextState: PortalState = { ...db, profile: updatedProfile };
+  let appsScriptSync: { ok: boolean; message: string } | undefined;
   if (nextState.syncInfo.appsScriptUrl && nextState.syncInfo.autoSyncEnabled) {
-    const syncRes = await pushAppsScriptFromBrowser(
+    appsScriptSync = await pushAppsScriptFromBrowser(
       nextState.syncInfo.appsScriptUrl,
       nextState
     );
-    if (syncRes.ok) {
+    if (appsScriptSync.ok) {
       nextState = {
         ...nextState,
         syncInfo: {
@@ -511,6 +553,7 @@ export async function saveTeacherProfile(
     ok: true,
     profile: updatedProfile,
     syncInfo: nextState.syncInfo,
+    appsScriptSync,
   };
 }
 
@@ -783,9 +826,16 @@ export async function saveGameItem(
   const existing = editingGameId
     ? db.games.find((g) => g.id === editingGameId)
     : undefined;
-  const finalShot = input.screenshotUpload?.base64Data
+  let finalShot = input.screenshotUpload?.base64Data
     ? input.screenshotUpload.base64Data
     : input.screenshotUrl.trim();
+  if (finalShot.startsWith('data:image/') && finalShot.length > 42000) {
+    finalShot = await compressImageDataUrlToLimit(finalShot, {
+      maxWidth: 560,
+      maxHeight: 360,
+      maxChars: 38000,
+    });
+  }
 
   const savedGame = normalizeGameItem({
     ...(existing ? { id: existing.id, createdAt: existing.createdAt } : {}),
@@ -919,6 +969,12 @@ export async function updateSyncInfoState(
     ...db.syncInfo,
     ...patch,
     appsScriptUrl: normalizedUrl,
+    disconnectedByUser:
+      patch.disconnectedByUser !== undefined
+        ? patch.disconnectedByUser
+        : normalizedUrl
+          ? false
+          : db.syncInfo.disconnectedByUser,
   };
   writeStaticDb({ ...db, syncInfo });
   return { ok: true, syncInfo };

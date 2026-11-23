@@ -61,6 +61,7 @@ export interface SpreadsheetSyncInfo {
   spreadsheetId: string | null;
   spreadsheetUrl: string | null;
   appsScriptUrl: string | null;
+  disconnectedByUser?: boolean;
   lastSyncedAt: string | null;
   autoSyncEnabled: boolean;
   connectedEmail: string | null;

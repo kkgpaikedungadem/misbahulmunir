@@ -124,11 +124,15 @@ async function pullFromAppsScript(
 
   try {
     const separator = url.includes('?') ? '&' : '?';
-    const response = await fetch(`${url.trim()}${separator}action=getAll`, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: AbortSignal.timeout(12000),
-    });
+    const response = await fetch(
+      `${url.trim()}${separator}action=getAll&_t=${Date.now()}`,
+      {
+        method: 'GET',
+        cache: 'no-store',
+        redirect: 'follow',
+        signal: AbortSignal.timeout(12000),
+      }
+    );
     const rawText = await response.text();
     const trimmed = rawText.trim();
 
@@ -514,11 +518,18 @@ async function startServer(): Promise<void> {
       ? normalizeExternalPhotoUrl(body.photoUrl)
       : db.profile.photoUrl;
     if (body.photoUpload?.base64Data && body.photoUpload?.fileName) {
-      const saved = saveBase64Upload(
-        body.photoUpload.fileName,
-        body.photoUpload.base64Data
-      );
-      nextPhotoUrl = saved.fileUrl;
+      if (
+        body.photoUpload.base64Data.startsWith('data:image/') &&
+        body.photoUpload.base64Data.length <= 45000
+      ) {
+        nextPhotoUrl = body.photoUpload.base64Data;
+      } else {
+        const saved = saveBase64Upload(
+          body.photoUpload.fileName,
+          body.photoUpload.base64Data
+        );
+        nextPhotoUrl = saved.fileUrl;
+      }
     }
 
     const updatedProfile: TeacherProfile = {
@@ -766,11 +777,18 @@ async function startServer(): Promise<void> {
 
     let finalScreenshotUrl = (body.screenshotUrl || '').trim();
     if (body.screenshotUpload?.base64Data && body.screenshotUpload?.fileName) {
-      const saved = saveBase64Upload(
-        body.screenshotUpload.fileName,
-        body.screenshotUpload.base64Data
-      );
-      finalScreenshotUrl = saved.fileUrl;
+      if (
+        body.screenshotUpload.base64Data.startsWith('data:image/') &&
+        body.screenshotUpload.base64Data.length <= 45000
+      ) {
+        finalScreenshotUrl = body.screenshotUpload.base64Data;
+      } else {
+        const saved = saveBase64Upload(
+          body.screenshotUpload.fileName,
+          body.screenshotUpload.base64Data
+        );
+        finalScreenshotUrl = saved.fileUrl;
+      }
     }
 
     const db = readDb();
@@ -831,11 +849,18 @@ async function startServer(): Promise<void> {
 
     let finalScreenshotUrl = candidateScreenshotUrl.trim();
     if (body.screenshotUpload?.base64Data && body.screenshotUpload?.fileName) {
-      const saved = saveBase64Upload(
-        body.screenshotUpload.fileName,
-        body.screenshotUpload.base64Data
-      );
-      finalScreenshotUrl = saved.fileUrl;
+      if (
+        body.screenshotUpload.base64Data.startsWith('data:image/') &&
+        body.screenshotUpload.base64Data.length <= 45000
+      ) {
+        finalScreenshotUrl = body.screenshotUpload.base64Data;
+      } else {
+        const saved = saveBase64Upload(
+          body.screenshotUpload.fileName,
+          body.screenshotUpload.base64Data
+        );
+        finalScreenshotUrl = saved.fileUrl;
+      }
     }
 
     const updatedGame = normalizeGameItem({

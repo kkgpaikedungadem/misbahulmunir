@@ -58,6 +58,7 @@ import {
   triggerCategoryCsvDownload,
   updateSyncInfoState,
 } from '../services/portalClient';
+import { compressImageFileToDataUrl } from '../utils/imageCompression';
 import { ConfirmDialog } from './ConfirmDialog';
 
 interface AdminDashboardProps {
@@ -353,7 +354,11 @@ export function AdminDashboard({
     try {
       let photoUpload: { fileName: string; base64Data: string } | undefined;
       if (photoFile) {
-        const base64Data = await fileToBase64(photoFile);
+        const base64Data = await compressImageFileToDataUrl(photoFile, {
+          maxWidth: 420,
+          maxHeight: 540,
+          maxChars: 38000,
+        });
         photoUpload = { fileName: photoFile.name, base64Data };
       }
 
@@ -372,9 +377,16 @@ export function AdminDashboard({
       setProfileForm(data.profile);
       setPhotoPreview(data.profile.photoUrl);
       setPhotoFile(null);
+      const syncSuffix = data.appsScriptSync?.ok
+        ? ' & tersinkron otomatis ke Google Spreadsheet (semua browser)'
+        : '';
+      const warnSuffix =
+        data.appsScriptSync && !data.appsScriptSync.ok
+          ? ` (Catatan Apps Script: ${data.appsScriptSync.message})`
+          : '';
       setFeedback({
         type: 'success',
-        message: 'Profil dan foto guru pada halaman depan berhasil diperbarui.',
+        message: `Profil dan foto guru pada halaman depan berhasil diperbarui${syncSuffix}.${warnSuffix}`,
       });
     } catch {
       setFeedback({
@@ -403,7 +415,14 @@ export function AdminDashboard({
     try {
       let screenshotUpload: { fileName: string; base64Data: string } | undefined;
       if (gameScreenshotFile) {
-        const base64Data = await fileToBase64(gameScreenshotFile);
+        const base64Data = await compressImageFileToDataUrl(
+          gameScreenshotFile,
+          {
+            maxWidth: 560,
+            maxHeight: 360,
+            maxChars: 38000,
+          }
+        );
         screenshotUpload = { fileName: gameScreenshotFile.name, base64Data };
       }
 
@@ -1861,6 +1880,7 @@ export function AdminDashboard({
                         void (async () => {
                           const data = await updateSyncInfoState({
                             appsScriptUrl: null,
+                            disconnectedByUser: true,
                           });
                           if (data.ok && data.syncInfo) {
                             onSyncInfoUpdated(data.syncInfo);

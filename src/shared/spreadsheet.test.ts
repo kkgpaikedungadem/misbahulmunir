@@ -289,3 +289,35 @@ test('verifyStaticAdminCredentials, client export builders, and resolveAppAssetU
     '/src/assets/images/test.jpg'
   );
 });
+
+test('buildAppsScriptPayload and parseAppsScriptResponse preserve updated teacher name and compact uploaded photo', () => {
+  const sampleCompactPhoto = `data:image/jpeg;base64,${'A'.repeat(1200)}`;
+  const customProfile = {
+    ...DEFAULT_PROFILE,
+    fullName: 'H. Ahmad Misbahul Munir, M.Pd.',
+    nip: '19880514 201903 1 999',
+    photoUrl: sampleCompactPhoto,
+  };
+  const payload = buildAppsScriptPayload(customProfile, []);
+  const parsed = parseAppsScriptResponse(
+    { ok: true, profileSheet: payload.profileSheet, sheets: payload.sheets },
+    DEFAULT_PROFILE
+  );
+  assert.equal(parsed.profile.fullName, 'H. Ahmad Misbahul Munir, M.Pd.');
+  assert.equal(parsed.profile.nip, '19880514 201903 1 999');
+  assert.equal(parsed.profile.photoUrl, sampleCompactPhoto);
+
+  const driveProfile = {
+    ...DEFAULT_PROFILE,
+    photoUrl: 'https://drive.google.com/file/d/1PhotoTestID/view?usp=sharing',
+  };
+  const drivePayload = buildAppsScriptPayload(driveProfile, []);
+  const driveParsed = parseAppsScriptResponse(
+    { ok: true, profileSheet: drivePayload.profileSheet },
+    DEFAULT_PROFILE
+  );
+  assert.equal(
+    driveParsed.profile.photoUrl,
+    'https://drive.google.com/thumbnail?id=1PhotoTestID&sz=w1000'
+  );
+});

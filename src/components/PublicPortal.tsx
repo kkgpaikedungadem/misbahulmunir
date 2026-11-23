@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   BookOpen,
   CheckCircle2,
@@ -81,6 +81,10 @@ export function PublicPortal({
   const [statusFilter, setStatusFilter] = useState('Semua');
   const [photoError, setPhotoError] = useState(false);
   const [failedGameImages, setFailedGameImages] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setPhotoError(false);
+  }, [profile.photoUrl]);
 
   const counts = useMemo(() => getCategoryCounts(records), [records]);
   const activeConfig =
@@ -203,6 +207,7 @@ export function PublicPortal({
                   <div className="overflow-hidden rounded-2xl bg-slate-100">
                     {!photoError && profile.photoUrl ? (
                       <img
+                        key={profile.photoUrl}
                         src={resolveAppAssetUrl(profile.photoUrl)}
                         alt={`Foto profil ${profile.fullName}`}
                         referrerPolicy="no-referrer"

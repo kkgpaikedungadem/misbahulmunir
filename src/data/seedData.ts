@@ -23,10 +23,13 @@ export const DEFAULT_PROFILE: TeacherProfile = {
   updatedAt: '2026-11-21T08:00:00.000Z',
 };
 
+export const DEFAULT_APPS_SCRIPT_URL =
+  'https://script.google.com/macros/s/AKfycbzhxjptYWI7PbSL8-MbY32eSZkDXwgEBoICv9jJMO_utSOUuEM08Im59y_RRoUMYU1tow/exec';
+
 export const DEFAULT_SYNC_INFO: SpreadsheetSyncInfo = {
   spreadsheetId: null,
   spreadsheetUrl: null,
-  appsScriptUrl: null,
+  appsScriptUrl: DEFAULT_APPS_SCRIPT_URL,
   lastSyncedAt: null,
   autoSyncEnabled: true,
   connectedEmail: null,
