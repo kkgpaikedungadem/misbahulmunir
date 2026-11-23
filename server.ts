@@ -3,26 +3,40 @@ import fs from 'fs';
 import path from 'path';
 import express, { NextFunction, Request, Response } from 'express';
 import { createServer as createViteServer } from 'vite';
-import { DEFAULT_PROFILE, DEFAULT_SYNC_INFO, SEED_RECORDS } from './src/data/seedData';
+import {
+  DEFAULT_GAMES,
+  DEFAULT_PROFILE,
+  DEFAULT_SYNC_INFO,
+  SEED_RECORDS,
+} from './src/data/seedData';
 import {
   AdminRecord,
   CATEGORIES,
   CATEGORY_MAP,
   CategoryId,
+  GameItem,
   SpreadsheetSyncInfo,
   TeacherProfile,
 } from './src/shared/categories';
 import {
+  AppsScriptPullRaw,
+  buildAppsScriptPayload,
   buildSpreadsheetSheetRows,
   formatRecordsToCsv,
+  isValidAppsScriptUrl,
+  normalizeExternalPhotoUrl,
+  normalizeGameItem,
   normalizeRecordForCategory,
+  parseAppsScriptResponse,
   parseCsvToRecords,
   validateDocumentInput,
+  validateGameInput,
 } from './src/shared/spreadsheet';
 
 interface DatabaseState {
   profile: TeacherProfile;
   records: AdminRecord[];
+  games: GameItem[];
   syncInfo: SpreadsheetSyncInfo;
 }
 
@@ -48,27 +62,221 @@ function ensureStorage(): void {
     const initial: DatabaseState = {
       profile: DEFAULT_PROFILE,
       records: SEED_RECORDS,
+      games: DEFAULT_GAMES,
       syncInfo: DEFAULT_SYNC_INFO,
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(initial, null, 2), 'utf-8');
   }
 }
 
+const ENV_APPS_SCRIPT_URL = (process.env.APPS_SCRIPT_URL || '').trim();
+let lastRemotePullAt = 0;
+const REMOTE_PULL_TTL_MS = 10000;
+
 function readDb(): DatabaseState {
   ensureStorage();
+  const fallbackScriptUrl = isValidAppsScriptUrl(ENV_APPS_SCRIPT_URL)
+    ? ENV_APPS_SCRIPT_URL
+    : null;
   try {
     const raw = fs.readFileSync(DB_FILE, 'utf-8');
     const parsed = JSON.parse(raw) as DatabaseState;
     return {
       profile: parsed.profile || DEFAULT_PROFILE,
       records: Array.isArray(parsed.records) ? parsed.records : SEED_RECORDS,
-      syncInfo: parsed.syncInfo || DEFAULT_SYNC_INFO,
+      games: Array.isArray(parsed.games) ? parsed.games : DEFAULT_GAMES,
+      syncInfo: {
+        ...DEFAULT_SYNC_INFO,
+        ...(parsed.syncInfo || {}),
+        appsScriptUrl: parsed.syncInfo?.appsScriptUrl || fallbackScriptUrl,
+      },
     };
   } catch {
     return {
       profile: DEFAULT_PROFILE,
       records: SEED_RECORDS,
-      syncInfo: DEFAULT_SYNC_INFO,
+      games: DEFAULT_GAMES,
+      syncInfo: {
+        ...DEFAULT_SYNC_INFO,
+        appsScriptUrl: fallbackScriptUrl,
+      },
+    };
+  }
+}
+
+async function pullFromAppsScript(
+  url: string,
+  currentState: DatabaseState
+): Promise<{
+  ok: boolean;
+  state: DatabaseState;
+  message: string;
+  needsDoGetUpdate?: boolean;
+}> {
+  if (!isValidAppsScriptUrl(url)) {
+    return {
+      ok: false,
+      state: currentState,
+      message: 'URL Apps Script tidak valid.',
+    };
+  }
+
+  try {
+    const separator = url.includes('?') ? '&' : '?';
+    const response = await fetch(`${url.trim()}${separator}action=getAll`, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: AbortSignal.timeout(12000),
+    });
+    const rawText = await response.text();
+    const trimmed = rawText.trim();
+
+    if (
+      trimmed.startsWith('<!DOCTYPE') ||
+      trimmed.startsWith('<html') ||
+      rawText.includes('accounts.google.com')
+    ) {
+      const missingDoGet = rawText.includes('doGet');
+      return {
+        ok: false,
+        state: currentState,
+        needsDoGetUpdate: missingDoGet,
+        message: missingDoGet
+          ? 'Apps Script belum memiliki fungsi doGet(e). Salin kode terbaru Code.gs lalu Deploy New Version agar semua perangkat otomatis sinkron.'
+          : 'Apps Script meminta otorisasi login. Pastikan Deployment Web App diatur ke "Anyone / Siapa saja".',
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        state: currentState,
+        message: `Apps Script GET merespons status HTTP ${response.status}.`,
+      };
+    }
+
+    const json = JSON.parse(rawText) as AppsScriptPullRaw;
+    if (json.ok === false) {
+      return {
+        ok: false,
+        state: currentState,
+        message: json.error || 'Apps Script mengembalikan error saat membaca data.',
+      };
+    }
+
+    const parsed = parseAppsScriptResponse(json, currentState.profile);
+    if (!parsed.hasRemoteData) {
+      return {
+        ok: true,
+        state: currentState,
+        message: 'Spreadsheet belum berisi tab data; data lokal dipertahankan.',
+      };
+    }
+
+    const nextState: DatabaseState = {
+      ...currentState,
+      profile: parsed.profile,
+      records: parsed.records.length > 0 ? parsed.records : currentState.records,
+      games: parsed.games.length > 0 ? parsed.games : currentState.games,
+      syncInfo: {
+        ...currentState.syncInfo,
+        appsScriptUrl: url.trim(),
+        lastSyncedAt: new Date().toISOString(),
+      },
+    };
+    writeDb(nextState);
+    lastRemotePullAt = Date.now();
+    return {
+      ok: true,
+      state: nextState,
+      message: `Berhasil menarik ${nextState.records.length} baris data, ${nextState.games.length} game, & profil guru dari Google Spreadsheet.`,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      state: currentState,
+      message:
+        err instanceof Error
+          ? `Gagal mengambil data dari Apps Script: ${err.message}`
+          : 'Gagal mengambil data dari Apps Script.',
+    };
+  }
+}
+
+async function pushToAppsScript(
+  url: string,
+  state: DatabaseState,
+  onlyCategoryId?: CategoryId
+): Promise<{ ok: boolean; message: string }> {
+  if (!isValidAppsScriptUrl(url)) {
+    return {
+      ok: false,
+      message:
+        'URL Apps Script tidak valid. Gunakan URL Web App https://script.google.com/macros/s/.../exec',
+    };
+  }
+
+  const payload = buildAppsScriptPayload(
+    state.profile,
+    state.records,
+    onlyCategoryId,
+    state.games
+  );
+
+  try {
+    const response = await fetch(url.trim(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      redirect: 'follow',
+      signal: AbortSignal.timeout(15000),
+    });
+
+    const rawText = await response.text();
+    const looksLikeHtmlLogin =
+      rawText.trim().startsWith('<!DOCTYPE') ||
+      rawText.includes('accounts.google.com');
+
+    if (looksLikeHtmlLogin) {
+      return {
+        ok: false,
+        message:
+          'Google Apps Script meminta login Google. Pastikan saat Deploy Web App opsi "Who has access / Yang memiliki akses" diatur ke "Anyone / Siapa saja".',
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: `Apps Script merespons status HTTP ${response.status}.`,
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(rawText) as { ok?: boolean; error?: string };
+      if (parsed.ok === false) {
+        return {
+          ok: false,
+          message: parsed.error || 'Skrip Apps Script mengembalikan status gagal.',
+        };
+      }
+    } catch {
+      // Plain text 200 OK response from custom Apps Script is also valid
+    }
+
+    return {
+      ok: true,
+      message: 'Data berhasil disinkronkan ke Google Apps Script.',
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      message:
+        err instanceof Error
+          ? `Gagal menghubungi URL Apps Script: ${err.message}`
+          : 'Gagal menghubungi URL Apps Script.',
     };
   }
 }
@@ -246,9 +454,30 @@ async function startServer(): Promise<void> {
     res.json({ authenticated: false });
   });
 
-  // Public portal data
-  app.get('/api/portal', (_req: Request, res: Response) => {
-    const db = readDb();
+  // Public portal data (no-store so every device always sees latest DB state)
+  app.get('/api/portal', async (req: Request, res: Response) => {
+    res.setHeader(
+      'Cache-Control',
+      'no-store, no-cache, must-revalidate, proxy-revalidate'
+    );
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+
+    let db = readDb();
+    const forceRefresh = req.query.refresh === '1';
+    const remoteUrl = db.syncInfo.appsScriptUrl;
+    if (
+      remoteUrl &&
+      isValidAppsScriptUrl(remoteUrl) &&
+      db.syncInfo.autoSyncEnabled &&
+      (forceRefresh || Date.now() - lastRemotePullAt > REMOTE_PULL_TTL_MS)
+    ) {
+      lastRemotePullAt = Date.now();
+      const pulled = await pullFromAppsScript(remoteUrl, db);
+      if (pulled.ok) {
+        db = pulled.state;
+      }
+    }
     res.json(db);
   });
 
@@ -360,7 +589,7 @@ async function startServer(): Promise<void> {
   });
 
   // Protected Admin Routes
-  app.put('/api/admin/profile', requireAdmin, (req: Request, res: Response) => {
+  app.put('/api/admin/profile', requireAdmin, async (req: Request, res: Response) => {
     const db = readDb();
     const body = req.body as Partial<TeacherProfile> & {
       photoUpload?: { fileName: string; base64Data: string };
@@ -371,7 +600,9 @@ async function startServer(): Promise<void> {
       return;
     }
 
-    let nextPhotoUrl = body.photoUrl || db.profile.photoUrl;
+    let nextPhotoUrl = body.photoUrl
+      ? normalizeExternalPhotoUrl(body.photoUrl)
+      : db.profile.photoUrl;
     if (body.photoUpload?.base64Data && body.photoUpload?.fileName) {
       const saved = saveBase64Upload(
         body.photoUpload.fileName,
@@ -398,11 +629,24 @@ async function startServer(): Promise<void> {
       updatedAt: new Date().toISOString(),
     };
 
-    writeDb({ ...db, profile: updatedProfile });
-    res.json({ profile: updatedProfile });
+    let nextState: DatabaseState = { ...db, profile: updatedProfile };
+    let appsScriptSync: { ok: boolean; message: string } | undefined;
+    if (nextState.syncInfo.appsScriptUrl && nextState.syncInfo.autoSyncEnabled) {
+      appsScriptSync = await pushToAppsScript(nextState.syncInfo.appsScriptUrl, nextState);
+      if (appsScriptSync.ok) {
+        nextState = {
+          ...nextState,
+          syncInfo: { ...nextState.syncInfo, lastSyncedAt: new Date().toISOString() },
+        };
+      }
+    }
+
+    writeDb(nextState);
+    lastRemotePullAt = Date.now();
+    res.json({ profile: updatedProfile, syncInfo: nextState.syncInfo, appsScriptSync });
   });
 
-  app.post('/api/admin/records', requireAdmin, (req: Request, res: Response) => {
+  app.post('/api/admin/records', requireAdmin, async (req: Request, res: Response) => {
     const body = req.body as Partial<AdminRecord> & {
       categoryId: CategoryId;
       fileUpload?: { fileName: string; base64Data: string };
@@ -429,11 +673,32 @@ async function startServer(): Promise<void> {
     });
 
     const nextRecords = [newRecord, ...db.records];
-    writeDb({ ...db, records: nextRecords });
-    res.status(201).json({ record: newRecord, records: nextRecords });
+    let nextState: DatabaseState = { ...db, records: nextRecords };
+    let appsScriptSync: { ok: boolean; message: string } | undefined;
+    if (nextState.syncInfo.appsScriptUrl && nextState.syncInfo.autoSyncEnabled) {
+      appsScriptSync = await pushToAppsScript(
+        nextState.syncInfo.appsScriptUrl,
+        nextState,
+        body.categoryId
+      );
+      if (appsScriptSync.ok) {
+        nextState = {
+          ...nextState,
+          syncInfo: { ...nextState.syncInfo, lastSyncedAt: new Date().toISOString() },
+        };
+      }
+    }
+
+    writeDb(nextState);
+    res.status(201).json({
+      record: newRecord,
+      records: nextRecords,
+      syncInfo: nextState.syncInfo,
+      appsScriptSync,
+    });
   });
 
-  app.put('/api/admin/records/:id', requireAdmin, (req: Request, res: Response) => {
+  app.put('/api/admin/records/:id', requireAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
     const db = readDb();
     const existing = db.records.find((r) => r.id === id);
@@ -467,24 +732,66 @@ async function startServer(): Promise<void> {
     });
 
     const nextRecords = db.records.map((r) => (r.id === id ? updatedRecord : r));
-    writeDb({ ...db, records: nextRecords });
-    res.json({ record: updatedRecord, records: nextRecords });
+    let nextState: DatabaseState = { ...db, records: nextRecords };
+    let appsScriptSync: { ok: boolean; message: string } | undefined;
+    if (nextState.syncInfo.appsScriptUrl && nextState.syncInfo.autoSyncEnabled) {
+      appsScriptSync = await pushToAppsScript(
+        nextState.syncInfo.appsScriptUrl,
+        nextState,
+        existing.categoryId
+      );
+      if (appsScriptSync.ok) {
+        nextState = {
+          ...nextState,
+          syncInfo: { ...nextState.syncInfo, lastSyncedAt: new Date().toISOString() },
+        };
+      }
+    }
+
+    writeDb(nextState);
+    res.json({
+      record: updatedRecord,
+      records: nextRecords,
+      syncInfo: nextState.syncInfo,
+      appsScriptSync,
+    });
   });
 
-  app.delete('/api/admin/records/:id', requireAdmin, (req: Request, res: Response) => {
+  app.delete('/api/admin/records/:id', requireAdmin, async (req: Request, res: Response) => {
     const { id } = req.params;
     const db = readDb();
-    const exists = db.records.some((r) => r.id === id);
-    if (!exists) {
+    const existing = db.records.find((r) => r.id === id);
+    if (!existing) {
       res.status(404).json({ error: 'Dokumen tidak ditemukan.' });
       return;
     }
     const nextRecords = db.records.filter((r) => r.id !== id);
-    writeDb({ ...db, records: nextRecords });
-    res.json({ deletedId: id, records: nextRecords });
+    let nextState: DatabaseState = { ...db, records: nextRecords };
+    let appsScriptSync: { ok: boolean; message: string } | undefined;
+    if (nextState.syncInfo.appsScriptUrl && nextState.syncInfo.autoSyncEnabled) {
+      appsScriptSync = await pushToAppsScript(
+        nextState.syncInfo.appsScriptUrl,
+        nextState,
+        existing.categoryId
+      );
+      if (appsScriptSync.ok) {
+        nextState = {
+          ...nextState,
+          syncInfo: { ...nextState.syncInfo, lastSyncedAt: new Date().toISOString() },
+        };
+      }
+    }
+
+    writeDb(nextState);
+    res.json({
+      deletedId: id,
+      records: nextRecords,
+      syncInfo: nextState.syncInfo,
+      appsScriptSync,
+    });
   });
 
-  app.post('/api/admin/import/:categoryId', requireAdmin, (req: Request, res: Response) => {
+  app.post('/api/admin/import/:categoryId', requireAdmin, async (req: Request, res: Response) => {
     const categoryId = req.params.categoryId as CategoryId;
     if (!CATEGORY_MAP[categoryId]) {
       res.status(404).json({ error: 'Kategori tidak ditemukan.' });
@@ -504,19 +811,295 @@ async function startServer(): Promise<void> {
 
     const db = readDb();
     const nextRecords = [...parsed, ...db.records];
-    writeDb({ ...db, records: nextRecords });
-    res.json({ importedCount: parsed.length, records: nextRecords });
+    let nextState: DatabaseState = { ...db, records: nextRecords };
+    let appsScriptSync: { ok: boolean; message: string } | undefined;
+    if (nextState.syncInfo.appsScriptUrl && nextState.syncInfo.autoSyncEnabled) {
+      appsScriptSync = await pushToAppsScript(
+        nextState.syncInfo.appsScriptUrl,
+        nextState,
+        categoryId
+      );
+      if (appsScriptSync.ok) {
+        nextState = {
+          ...nextState,
+          syncInfo: { ...nextState.syncInfo, lastSyncedAt: new Date().toISOString() },
+        };
+      }
+    }
+
+    writeDb(nextState);
+    res.json({
+      importedCount: parsed.length,
+      records: nextRecords,
+      syncInfo: nextState.syncInfo,
+      appsScriptSync,
+    });
+  });
+
+  // Game Center CRUD (Protected Admin Routes)
+  app.post('/api/admin/games', requireAdmin, async (req: Request, res: Response) => {
+    const body = req.body as Partial<GameItem> & {
+      screenshotUpload?: { fileName: string; base64Data: string };
+    };
+
+    const hasFile = Boolean(body.screenshotUpload?.base64Data && body.screenshotUpload?.fileName);
+    const validation = validateGameInput({
+      title: body.title,
+      gameUrl: body.gameUrl,
+      screenshotUrl: body.screenshotUrl,
+      hasScreenshotFile: hasFile,
+    });
+    if (!validation.valid) {
+      res.status(400).json({ error: validation.errors.join(' ') });
+      return;
+    }
+
+    let finalScreenshotUrl = (body.screenshotUrl || '').trim();
+    if (body.screenshotUpload?.base64Data && body.screenshotUpload?.fileName) {
+      const saved = saveBase64Upload(
+        body.screenshotUpload.fileName,
+        body.screenshotUpload.base64Data
+      );
+      finalScreenshotUrl = saved.fileUrl;
+    }
+
+    const db = readDb();
+    const newGame = normalizeGameItem({
+      title: body.title,
+      gameUrl: body.gameUrl,
+      screenshotUrl: finalScreenshotUrl,
+    });
+
+    const nextGames = [newGame, ...db.games];
+    let nextState: DatabaseState = { ...db, games: nextGames };
+    let appsScriptSync: { ok: boolean; message: string } | undefined;
+    if (nextState.syncInfo.appsScriptUrl && nextState.syncInfo.autoSyncEnabled) {
+      appsScriptSync = await pushToAppsScript(nextState.syncInfo.appsScriptUrl, nextState);
+      if (appsScriptSync.ok) {
+        nextState = {
+          ...nextState,
+          syncInfo: { ...nextState.syncInfo, lastSyncedAt: new Date().toISOString() },
+        };
+      }
+    }
+
+    writeDb(nextState);
+    lastRemotePullAt = Date.now();
+    res.status(201).json({
+      game: newGame,
+      games: nextGames,
+      syncInfo: nextState.syncInfo,
+      appsScriptSync,
+    });
+  });
+
+  app.put('/api/admin/games/:id', requireAdmin, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const db = readDb();
+    const existing = db.games.find((g) => g.id === id);
+    if (!existing) {
+      res.status(404).json({ error: 'Game tidak ditemukan.' });
+      return;
+    }
+
+    const body = req.body as Partial<GameItem> & {
+      screenshotUpload?: { fileName: string; base64Data: string };
+    };
+
+    const hasFile = Boolean(body.screenshotUpload?.base64Data && body.screenshotUpload?.fileName);
+    const candidateScreenshotUrl = body.screenshotUrl ?? existing.screenshotUrl;
+    const validation = validateGameInput({
+      title: body.title ?? existing.title,
+      gameUrl: body.gameUrl ?? existing.gameUrl,
+      screenshotUrl: candidateScreenshotUrl,
+      hasScreenshotFile: hasFile,
+    });
+    if (!validation.valid) {
+      res.status(400).json({ error: validation.errors.join(' ') });
+      return;
+    }
+
+    let finalScreenshotUrl = candidateScreenshotUrl.trim();
+    if (body.screenshotUpload?.base64Data && body.screenshotUpload?.fileName) {
+      const saved = saveBase64Upload(
+        body.screenshotUpload.fileName,
+        body.screenshotUpload.base64Data
+      );
+      finalScreenshotUrl = saved.fileUrl;
+    }
+
+    const updatedGame = normalizeGameItem({
+      id: existing.id,
+      title: body.title ?? existing.title,
+      gameUrl: body.gameUrl ?? existing.gameUrl,
+      screenshotUrl: finalScreenshotUrl,
+      createdAt: existing.createdAt,
+    });
+
+    const nextGames = db.games.map((g) => (g.id === id ? updatedGame : g));
+    let nextState: DatabaseState = { ...db, games: nextGames };
+    let appsScriptSync: { ok: boolean; message: string } | undefined;
+    if (nextState.syncInfo.appsScriptUrl && nextState.syncInfo.autoSyncEnabled) {
+      appsScriptSync = await pushToAppsScript(nextState.syncInfo.appsScriptUrl, nextState);
+      if (appsScriptSync.ok) {
+        nextState = {
+          ...nextState,
+          syncInfo: { ...nextState.syncInfo, lastSyncedAt: new Date().toISOString() },
+        };
+      }
+    }
+
+    writeDb(nextState);
+    lastRemotePullAt = Date.now();
+    res.json({
+      game: updatedGame,
+      games: nextGames,
+      syncInfo: nextState.syncInfo,
+      appsScriptSync,
+    });
+  });
+
+  app.delete('/api/admin/games/:id', requireAdmin, async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const db = readDb();
+    const existing = db.games.find((g) => g.id === id);
+    if (!existing) {
+      res.status(404).json({ error: 'Game tidak ditemukan.' });
+      return;
+    }
+
+    const nextGames = db.games.filter((g) => g.id !== id);
+    let nextState: DatabaseState = { ...db, games: nextGames };
+    let appsScriptSync: { ok: boolean; message: string } | undefined;
+    if (nextState.syncInfo.appsScriptUrl && nextState.syncInfo.autoSyncEnabled) {
+      appsScriptSync = await pushToAppsScript(nextState.syncInfo.appsScriptUrl, nextState);
+      if (appsScriptSync.ok) {
+        nextState = {
+          ...nextState,
+          syncInfo: { ...nextState.syncInfo, lastSyncedAt: new Date().toISOString() },
+        };
+      }
+    }
+
+    writeDb(nextState);
+    lastRemotePullAt = Date.now();
+    res.json({
+      deletedId: id,
+      games: nextGames,
+      syncInfo: nextState.syncInfo,
+      appsScriptSync,
+    });
   });
 
   app.put('/api/admin/sync-info', requireAdmin, (req: Request, res: Response) => {
     const db = readDb();
     const body = req.body as Partial<SpreadsheetSyncInfo>;
+    if (body.appsScriptUrl !== undefined && body.appsScriptUrl !== null && body.appsScriptUrl.trim() !== '') {
+      if (!isValidAppsScriptUrl(body.appsScriptUrl)) {
+        res.status(400).json({
+          error:
+            'URL Apps Script tidak valid. Harus diawali https://script.google.com/ atau https://script.googleusercontent.com/.',
+        });
+        return;
+      }
+    }
+
+    const normalizedAppsScriptUrl =
+      body.appsScriptUrl === undefined
+        ? db.syncInfo.appsScriptUrl
+        : body.appsScriptUrl && body.appsScriptUrl.trim()
+          ? body.appsScriptUrl.trim()
+          : null;
+
     const syncInfo: SpreadsheetSyncInfo = {
       ...db.syncInfo,
       ...body,
+      appsScriptUrl: normalizedAppsScriptUrl,
     };
     writeDb({ ...db, syncInfo });
     res.json({ syncInfo });
+  });
+
+  app.post('/api/admin/apps-script/sync', requireAdmin, async (req: Request, res: Response) => {
+    const db = readDb();
+    const body = req.body as { appsScriptUrl?: string | null; categoryId?: CategoryId };
+    const targetUrl = (body.appsScriptUrl ?? db.syncInfo.appsScriptUrl ?? '').trim();
+
+    if (!isValidAppsScriptUrl(targetUrl)) {
+      res.status(400).json({
+        error:
+          'Masukkan URL Web App Google Apps Script yang valid (contoh: https://script.google.com/macros/s/.../exec).',
+      });
+      return;
+    }
+
+    const updatedState: DatabaseState = {
+      ...db,
+      syncInfo: {
+        ...db.syncInfo,
+        appsScriptUrl: targetUrl,
+      },
+    };
+
+    const result = await pushToAppsScript(targetUrl, updatedState, body.categoryId);
+    if (!result.ok) {
+      // Still persist valid URL so admin does not lose what they entered
+      writeDb(updatedState);
+      res.status(502).json({
+        synced: false,
+        error: result.message,
+        syncInfo: updatedState.syncInfo,
+      });
+      return;
+    }
+
+    const syncedState: DatabaseState = {
+      ...updatedState,
+      syncInfo: {
+        ...updatedState.syncInfo,
+        lastSyncedAt: new Date().toISOString(),
+      },
+    };
+    writeDb(syncedState);
+    lastRemotePullAt = Date.now();
+    res.json({
+      synced: true,
+      message: result.message,
+      syncInfo: syncedState.syncInfo,
+    });
+  });
+
+  app.post('/api/admin/apps-script/pull', requireAdmin, async (req: Request, res: Response) => {
+    const db = readDb();
+    const body = req.body as { appsScriptUrl?: string | null };
+    const targetUrl = (body.appsScriptUrl ?? db.syncInfo.appsScriptUrl ?? '').trim();
+
+    if (!isValidAppsScriptUrl(targetUrl)) {
+      res.status(400).json({
+        error:
+          'Masukkan URL Web App Google Apps Script yang valid terlebih dahulu.',
+      });
+      return;
+    }
+
+    const result = await pullFromAppsScript(targetUrl, db);
+    if (!result.ok) {
+      res.status(502).json({
+        synced: false,
+        needsDoGetUpdate: Boolean(result.needsDoGetUpdate),
+        error: result.message,
+      });
+      return;
+    }
+
+    res.json({
+      synced: true,
+      message: result.message,
+      profile: result.state.profile,
+      records: result.state.records,
+      games: result.state.games,
+      syncInfo: result.state.syncInfo,
+    });
   });
 
   // Vite dev middleware or production static files

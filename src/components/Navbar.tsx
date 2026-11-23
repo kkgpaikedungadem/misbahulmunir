@@ -75,15 +75,15 @@ export function Navbar({
             Rapor Tahfidz
           </a>
           <a
-            href="#spreadsheet"
+            href="#game-center"
             onClick={(e) => {
               e.preventDefault();
               if (activeView === 'admin') onBackToPublic();
-              onNavigateSection('spreadsheet');
+              onNavigateSection('game-center');
             }}
             className="transition-colors hover:text-[#173828] whitespace-nowrap shrink-0"
           >
-            Spreadsheet
+            Game Center
           </a>
         </nav>
 

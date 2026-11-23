@@ -1,7 +1,10 @@
 import {
   AdminRecord,
   DEFAULT_PROFILE_PHOTO_URL,
+  GameItem,
+  SCHOOL_BANNER_URL,
   SpreadsheetSyncInfo,
+  TAHFIDZ_COVER_URL,
   TeacherProfile,
 } from '../shared/categories';
 
@@ -23,10 +26,30 @@ export const DEFAULT_PROFILE: TeacherProfile = {
 export const DEFAULT_SYNC_INFO: SpreadsheetSyncInfo = {
   spreadsheetId: null,
   spreadsheetUrl: null,
+  appsScriptUrl: null,
   lastSyncedAt: null,
   autoSyncEnabled: true,
   connectedEmail: null,
 };
+
+export const DEFAULT_GAMES: GameItem[] = [
+  {
+    id: 'game-001',
+    title: 'Kuis Interaktif Hafalan Juz 30 & Tajwid',
+    gameUrl: 'https://wordwall.net',
+    screenshotUrl: TAHFIDZ_COVER_URL,
+    createdAt: '2026-11-20T08:00:00.000Z',
+    updatedAt: '2026-11-20T08:00:00.000Z',
+  },
+  {
+    id: 'game-002',
+    title: 'Petualangan Akhlak Mulia & Rukun Islam',
+    gameUrl: 'https://quizizz.com',
+    screenshotUrl: SCHOOL_BANNER_URL,
+    createdAt: '2026-11-20T08:05:00.000Z',
+    updatedAt: '2026-11-20T08:05:00.000Z',
+  },
+];
 
 export const SEED_RECORDS: AdminRecord[] = [
   // 01. Berkas TPG

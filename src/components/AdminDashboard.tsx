@@ -1,13 +1,20 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Check,
   CheckCircle2,
   CloudUpload,
+  Code2,
+  Copy,
   Download,
   Edit3,
   ExternalLink,
   FileSpreadsheet,
   FolderSync,
+  Gamepad2,
+  Image as ImageIcon,
+  Link2,
   LogOut,
+  Play,
   Plus,
   RefreshCw,
   Trash2,
@@ -20,10 +27,16 @@ import {
   CATEGORIES,
   CATEGORY_MAP,
   CategoryId,
+  GameItem,
   SpreadsheetSyncInfo,
   TeacherProfile,
 } from '../shared/categories';
-import { filterRecords, getCategoryCounts } from '../shared/spreadsheet';
+import {
+  APPS_SCRIPT_CODE_TEMPLATE,
+  filterRecords,
+  getCategoryCounts,
+  isValidAppsScriptUrl,
+} from '../shared/spreadsheet';
 import {
   createMasterSpreadsheet,
   getGoogleAccessToken,
@@ -37,6 +50,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 interface AdminDashboardProps {
   profile: TeacherProfile;
   records: AdminRecord[];
+  games: GameItem[];
   syncInfo: SpreadsheetSyncInfo;
   googleUser: FirebaseUser | null;
   initialSection?: DashboardSection;
@@ -44,12 +58,17 @@ interface AdminDashboardProps {
   onGoogleDisconnected: () => void;
   onProfileUpdated: (profile: TeacherProfile) => void;
   onRecordsUpdated: (records: AdminRecord[]) => void;
+  onGamesUpdated: (games: GameItem[]) => void;
   onSyncInfoUpdated: (syncInfo: SpreadsheetSyncInfo) => void;
   onSelectRecord: (record: AdminRecord) => void;
   onLogout: () => void;
 }
 
-export type DashboardSection = CategoryId | 'profil-guru' | 'google-sheets';
+export type DashboardSection =
+  | CategoryId
+  | 'profil-guru'
+  | 'game-center'
+  | 'google-sheets';
 
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -74,6 +93,7 @@ function buildEmptyForm(categoryId: CategoryId): Partial<AdminRecord> {
 export function AdminDashboard({
   profile,
   records,
+  games,
   syncInfo,
   googleUser,
   initialSection = 'berkas-tpg',
@@ -81,6 +101,7 @@ export function AdminDashboard({
   onGoogleDisconnected,
   onProfileUpdated,
   onRecordsUpdated,
+  onGamesUpdated,
   onSyncInfoUpdated,
   onSelectRecord,
   onLogout,
@@ -103,6 +124,14 @@ export function AdminDashboard({
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string>(profile.photoUrl);
 
+  // Game Center state
+  const [gameTitle, setGameTitle] = useState('');
+  const [gameUrl, setGameUrl] = useState('');
+  const [gameScreenshotUrl, setGameScreenshotUrl] = useState('');
+  const [gameScreenshotFile, setGameScreenshotFile] = useState<File | null>(null);
+  const [gameScreenshotPreview, setGameScreenshotPreview] = useState('');
+  const [editingGameId, setEditingGameId] = useState<string | null>(null);
+
   useEffect(() => {
     setSection(initialSection);
   }, [initialSection]);
@@ -114,8 +143,19 @@ export function AdminDashboard({
     }
   }, [profile, photoFile]);
 
-  // Google Workspace state
+  // Google Workspace & Apps Script state
   const [googleBusy, setGoogleBusy] = useState(false);
+  const [appsScriptUrlInput, setAppsScriptUrlInput] = useState(
+    syncInfo.appsScriptUrl || ''
+  );
+  const [appsScriptBusy, setAppsScriptBusy] = useState(false);
+  const [showAppsScriptCode, setShowAppsScriptCode] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
+
+  useEffect(() => {
+    setAppsScriptUrlInput(syncInfo.appsScriptUrl || '');
+  }, [syncInfo.appsScriptUrl]);
+
   const [confirmState, setConfirmState] = useState<{
     open: boolean;
     title: string;
@@ -128,10 +168,13 @@ export function AdminDashboard({
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const csvImportRef = useRef<HTMLInputElement | null>(null);
+  const gameFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const counts = useMemo(() => getCategoryCounts(records), [records]);
   const isCategorySection =
-    section !== 'profil-guru' && section !== 'google-sheets';
+    section !== 'profil-guru' &&
+    section !== 'game-center' &&
+    section !== 'google-sheets';
   const activeCategoryId: CategoryId = isCategorySection ? section : 'berkas-tpg';
   const activeConfig = CATEGORY_MAP[activeCategoryId];
 
@@ -201,6 +244,8 @@ export function AdminDashboard({
 
       const data = (await res.json()) as {
         records?: AdminRecord[];
+        syncInfo?: SpreadsheetSyncInfo;
+        appsScriptSync?: { ok: boolean; message: string };
         error?: string;
       };
       if (!res.ok || !data.records) {
@@ -212,6 +257,9 @@ export function AdminDashboard({
       }
 
       onRecordsUpdated(data.records);
+      if (data.syncInfo) {
+        onSyncInfoUpdated(data.syncInfo);
+      }
 
       // Real-time auto-sync to Google Sheets if connected & spreadsheet exists
       const accessToken = getGoogleAccessToken();
@@ -236,13 +284,22 @@ export function AdminDashboard({
           onSyncInfoUpdated(syncJson.syncInfo);
         }
         syncMsg = ' & tersinkron real-time ke Google Sheets';
+      } else if (data.appsScriptSync?.ok) {
+        syncMsg = ' & tersinkron otomatis ke URL Apps Script';
       }
+
+      const warnSuffix =
+        data.appsScriptSync && !data.appsScriptSync.ok
+          ? ` (Catatan Apps Script: ${data.appsScriptSync.message})`
+          : '';
 
       setFeedback({
         type: 'success',
-        message: editingId
-          ? `Data ${activeConfig.name} berhasil diperbarui${syncMsg}.`
-          : `Data & berkas baru berhasil diunggah otomatis ke tab ${activeConfig.name}${syncMsg}.`,
+        message: `${
+          editingId
+            ? `Data ${activeConfig.name} berhasil diperbarui${syncMsg}.`
+            : `Data & berkas baru berhasil diunggah otomatis ke tab ${activeConfig.name}${syncMsg}.`
+        }${warnSuffix}`,
       });
       setEditingId(null);
       setAttachedFile(null);
@@ -278,12 +335,16 @@ export function AdminDashboard({
         });
         const data = (await res.json()) as {
           records?: AdminRecord[];
+          syncInfo?: SpreadsheetSyncInfo;
           error?: string;
         };
         if (!res.ok || !data.records) {
           throw new Error(data.error || 'Gagal menghapus data.');
         }
         onRecordsUpdated(data.records);
+        if (data.syncInfo) {
+          onSyncInfoUpdated(data.syncInfo);
+        }
 
         const accessToken = getGoogleAccessToken();
         if (accessToken && syncInfo.spreadsheetId && syncInfo.autoSyncEnabled) {
@@ -323,6 +384,7 @@ export function AdminDashboard({
       });
       const data = (await res.json()) as {
         profile?: TeacherProfile;
+        syncInfo?: SpreadsheetSyncInfo;
         error?: string;
       };
       if (!res.ok || !data.profile) {
@@ -333,6 +395,9 @@ export function AdminDashboard({
         return;
       }
       onProfileUpdated(data.profile);
+      if (data.syncInfo) {
+        onSyncInfoUpdated(data.syncInfo);
+      }
       setProfileForm(data.profile);
       setPhotoPreview(data.profile.photoUrl);
       setPhotoFile(null);
@@ -348,6 +413,123 @@ export function AdminDashboard({
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const resetGameForm = () => {
+    setEditingGameId(null);
+    setGameTitle('');
+    setGameUrl('');
+    setGameScreenshotUrl('');
+    setGameScreenshotFile(null);
+    setGameScreenshotPreview('');
+    if (gameFileInputRef.current) gameFileInputRef.current.value = '';
+  };
+
+  const handleSaveGame = async (e: FormEvent) => {
+    e.preventDefault();
+    setFeedback(null);
+    setSubmitting(true);
+    try {
+      let screenshotUpload: { fileName: string; base64Data: string } | undefined;
+      if (gameScreenshotFile) {
+        const base64Data = await fileToBase64(gameScreenshotFile);
+        screenshotUpload = { fileName: gameScreenshotFile.name, base64Data };
+      }
+
+      const endpoint = editingGameId
+        ? `/api/admin/games/${editingGameId}`
+        : '/api/admin/games';
+      const method = editingGameId ? 'PUT' : 'POST';
+
+      const res = await fetch(endpoint, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: gameTitle,
+          gameUrl,
+          screenshotUrl: gameScreenshotUrl,
+          ...(screenshotUpload ? { screenshotUpload } : {}),
+        }),
+      });
+      const data = (await res.json()) as {
+        games?: GameItem[];
+        syncInfo?: SpreadsheetSyncInfo;
+        appsScriptSync?: { ok: boolean; message: string };
+        error?: string;
+      };
+      if (!res.ok || !data.games) {
+        setFeedback({
+          type: 'error',
+          message: data.error || 'Gagal menyimpan data Game Center.',
+        });
+        return;
+      }
+
+      onGamesUpdated(data.games);
+      if (data.syncInfo) {
+        onSyncInfoUpdated(data.syncInfo);
+      }
+
+      const warnSuffix =
+        data.appsScriptSync && !data.appsScriptSync.ok
+          ? ` (Catatan Apps Script: ${data.appsScriptSync.message})`
+          : '';
+      const syncSuffix = data.appsScriptSync?.ok
+        ? ' & tersinkron otomatis ke Apps Script'
+        : '';
+
+      setFeedback({
+        type: 'success',
+        message: `${
+          editingGameId
+            ? `Game "${gameTitle}" berhasil diperbarui${syncSuffix}.`
+            : `Game "${gameTitle}" berhasil ditambahkan ke Game Center${syncSuffix}.`
+        }${warnSuffix}`,
+      });
+      resetGameForm();
+    } catch {
+      setFeedback({
+        type: 'error',
+        message: 'Gagal menyimpan game ke server.',
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const requestDeleteGame = (game: GameItem) => {
+    setConfirmState({
+      open: true,
+      title: `Hapus Game "${game.title}"?`,
+      description:
+        'Game ini akan dihapus dari daftar Game Center pada halaman depan dan database.',
+      confirmLabel: 'Ya, Hapus Game',
+      variant: 'danger',
+      action: async () => {
+        const res = await fetch(`/api/admin/games/${game.id}`, {
+          method: 'DELETE',
+        });
+        const data = (await res.json()) as {
+          games?: GameItem[];
+          syncInfo?: SpreadsheetSyncInfo;
+          error?: string;
+        };
+        if (!res.ok || !data.games) {
+          throw new Error(data.error || 'Gagal menghapus game.');
+        }
+        onGamesUpdated(data.games);
+        if (data.syncInfo) {
+          onSyncInfoUpdated(data.syncInfo);
+        }
+        if (editingGameId === game.id) {
+          resetGameForm();
+        }
+        setFeedback({
+          type: 'success',
+          message: `Game "${game.title}" berhasil dihapus dari Game Center.`,
+        });
+      },
+    });
   };
 
   const handleCsvFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
@@ -468,6 +650,187 @@ export function AdminDashboard({
     }
   };
 
+  const handleSyncAppsScript = async (
+    e?: FormEvent,
+    onlyCategoryId?: CategoryId
+  ) => {
+    if (e) e.preventDefault();
+    setFeedback(null);
+
+    const trimmed = appsScriptUrlInput.trim();
+    if (!isValidAppsScriptUrl(trimmed)) {
+      setFeedback({
+        type: 'error',
+        message:
+          'URL Apps Script harus berupa alamat Web App Google yang valid (diawali https://script.google.com/macros/s/.../exec).',
+      });
+      return;
+    }
+
+    setAppsScriptBusy(true);
+    try {
+      const res = await fetch('/api/admin/apps-script/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          appsScriptUrl: trimmed,
+          ...(onlyCategoryId ? { categoryId: onlyCategoryId } : {}),
+        }),
+      });
+      const data = (await res.json()) as {
+        synced?: boolean;
+        message?: string;
+        error?: string;
+        syncInfo?: SpreadsheetSyncInfo;
+      };
+      if (data.syncInfo) {
+        onSyncInfoUpdated(data.syncInfo);
+      }
+      if (!res.ok || !data.synced) {
+        setFeedback({
+          type: 'error',
+          message:
+            data.error ||
+            'URL tersimpan, namun gagal menghubungi Google Apps Script Web App.',
+        });
+        return;
+      }
+      setFeedback({
+        type: 'success',
+        message:
+          data.message ||
+          'URL Apps Script tersimpan dan seluruh tab spreadsheet berhasil disinkronkan!',
+      });
+    } catch {
+      setFeedback({
+        type: 'error',
+        message: 'Terjadi gangguan jaringan saat mengirim data ke Apps Script.',
+      });
+    } finally {
+      setAppsScriptBusy(false);
+    }
+  };
+
+  const handleSaveAppsScriptUrlOnly = async () => {
+    setFeedback(null);
+    const trimmed = appsScriptUrlInput.trim();
+    if (trimmed && !isValidAppsScriptUrl(trimmed)) {
+      setFeedback({
+        type: 'error',
+        message:
+          'URL Apps Script tidak valid. Harus diawali https://script.google.com/ atau https://script.googleusercontent.com/.',
+      });
+      return;
+    }
+    setAppsScriptBusy(true);
+    try {
+      const res = await fetch('/api/admin/sync-info', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appsScriptUrl: trimmed || null }),
+      });
+      const data = (await res.json()) as {
+        syncInfo?: SpreadsheetSyncInfo;
+        error?: string;
+      };
+      if (!res.ok || !data.syncInfo) {
+        setFeedback({
+          type: 'error',
+          message: data.error || 'Gagal menyimpan URL Apps Script.',
+        });
+        return;
+      }
+      onSyncInfoUpdated(data.syncInfo);
+      setFeedback({
+        type: 'success',
+        message: trimmed
+          ? 'URL Google Apps Script berhasil disimpan. Sinkronisasi otomatis aktif saat data ditambah/diubah.'
+          : 'URL Google Apps Script telah dihapus.',
+      });
+    } catch {
+      setFeedback({
+        type: 'error',
+        message: 'Gagal menyimpan konfigurasi Apps Script.',
+      });
+    } finally {
+      setAppsScriptBusy(false);
+    }
+  };
+
+  const handlePullAppsScript = async () => {
+    setFeedback(null);
+    const trimmed = appsScriptUrlInput.trim();
+    if (!isValidAppsScriptUrl(trimmed)) {
+      setFeedback({
+        type: 'error',
+        message:
+          'Masukkan URL Web App Google Apps Script yang valid terlebih dahulu.',
+      });
+      return;
+    }
+
+    setAppsScriptBusy(true);
+    try {
+      const res = await fetch('/api/admin/apps-script/pull', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appsScriptUrl: trimmed }),
+      });
+      const data = (await res.json()) as {
+        synced?: boolean;
+        needsDoGetUpdate?: boolean;
+        message?: string;
+        error?: string;
+        profile?: TeacherProfile;
+        records?: AdminRecord[];
+        games?: GameItem[];
+        syncInfo?: SpreadsheetSyncInfo;
+      };
+      if (!res.ok || !data.synced) {
+        if (data.needsDoGetUpdate) {
+          setShowAppsScriptCode(true);
+        }
+        setFeedback({
+          type: 'error',
+          message:
+            data.error ||
+            'Gagal menarik data dari Google Spreadsheet melalui Apps Script.',
+        });
+        return;
+      }
+      if (data.profile) onProfileUpdated(data.profile);
+      if (data.records) onRecordsUpdated(data.records);
+      if (data.games) onGamesUpdated(data.games);
+      if (data.syncInfo) onSyncInfoUpdated(data.syncInfo);
+      setFeedback({
+        type: 'success',
+        message:
+          data.message ||
+          'Data profil, game center, & 9 kategori berhasil ditarik dari Google Spreadsheet!',
+      });
+    } catch {
+      setFeedback({
+        type: 'error',
+        message: 'Terjadi gangguan jaringan saat menarik data dari Apps Script.',
+      });
+    } finally {
+      setAppsScriptBusy(false);
+    }
+  };
+
+  const handleCopyAppsScriptCode = async () => {
+    try {
+      await navigator.clipboard.writeText(APPS_SCRIPT_CODE_TEMPLATE);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2500);
+    } catch {
+      setFeedback({
+        type: 'error',
+        message: 'Gagal menyalin kode otomatis. Silakan blok dan salin manual.',
+      });
+    }
+  };
+
   const requestSyncCategoryToSheets = () => {
     const token = getGoogleAccessToken();
     if (!token || !syncInfo.spreadsheetId) {
@@ -564,6 +927,31 @@ export function AdminDashboard({
               >
                 <UserCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
                 <span>Ubah Nama, NIP &amp; Foto</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSection('game-center');
+                  setFeedback(null);
+                }}
+                className={`flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs font-medium transition-colors ${
+                  section === 'game-center'
+                    ? 'bg-[#0F6B4E] text-white'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <span className="flex items-center gap-2">
+                  <Gamepad2 className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span>Game Center</span>
+                </span>
+                <span
+                  className={`ml-2 font-mono tabular-nums ${
+                    section === 'game-center' ? 'text-emerald-100' : 'text-slate-400'
+                  }`}
+                >
+                  {games.length}
+                </span>
               </button>
 
               <button
@@ -692,6 +1080,17 @@ export function AdminDashboard({
                       >
                         <RefreshCw className="h-3.5 w-3.5" />
                         Sinkron Google Sheets
+                      </button>
+                    )}
+                    {syncInfo.appsScriptUrl && (
+                      <button
+                        type="button"
+                        disabled={appsScriptBusy}
+                        onClick={() => handleSyncAppsScript(undefined, activeCategoryId)}
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-[#0F6B4E] px-3 py-2 text-xs font-semibold text-white hover:bg-[#0B533C] disabled:opacity-60 whitespace-nowrap"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        {appsScriptBusy ? 'Menyinkronkan...' : 'Kirim ke Apps Script'}
                       </button>
                     )}
                   </div>
@@ -1009,29 +1408,48 @@ export function AdminDashboard({
                       className="h-full w-full object-cover object-top"
                     />
                   </div>
-                  <div>
+                  <div className="flex-1">
                     <p className="text-sm font-semibold text-slate-900">
                       Foto Profil Utama
                     </p>
                     <p className="mt-1 text-xs text-slate-500">
-                      Gunakan foto formal/batik beresolusi baik (rasio potret 3:4 atau
-                      persegi).
+                      Unggah foto langsung atau tempel URL foto / link Google Drive agar tampil konsisten di semua perangkat.
                     </p>
-                    <label className="mt-3 inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50">
-                      <Upload className="h-3.5 w-3.5" />
-                      Ganti Foto Profil
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (!file) return;
-                          setPhotoFile(file);
-                          setPhotoPreview(URL.createObjectURL(file));
-                        }}
-                        className="sr-only"
-                      />
-                    </label>
+                    <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+                      <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 shrink-0">
+                        <Upload className="h-3.5 w-3.5" />
+                        Ganti Foto Profil
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (!file) return;
+                            setPhotoFile(file);
+                            setPhotoPreview(URL.createObjectURL(file));
+                          }}
+                          className="sr-only"
+                        />
+                      </label>
+                      <div className="flex-1">
+                        <label htmlFor="prof-photo-url" className="sr-only">
+                          URL Foto Profil (opsional)
+                        </label>
+                        <input
+                          id="prof-photo-url"
+                          type="text"
+                          value={profileForm.photoUrl}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setPhotoFile(null);
+                            setProfileForm((p) => ({ ...p, photoUrl: val }));
+                            if (val.trim()) setPhotoPreview(val.trim());
+                          }}
+                          placeholder="Atau tempel URL foto / Google Drive"
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:border-[#0F6B4E] focus:outline-none"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -1224,30 +1642,405 @@ export function AdminDashboard({
             </div>
           )}
 
-          {/* Google Sheets & Google Drive Real-Time Integration */}
+          {/* Game Center Management */}
+          {section === 'game-center' && (
+            <div className="space-y-6">
+              <div className="rounded-2xl border border-slate-200 bg-white p-6">
+                <div className="flex flex-col justify-between gap-2 border-b border-slate-200 pb-4 sm:flex-row sm:items-center">
+                  <div>
+                    <h1 className="font-display text-2xl font-bold text-slate-900">
+                      Kelola Game Center Edukatif
+                    </h1>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Masukkan nama game, link game, dan screenshot game. Anak didik dapat
+                      langsung klik tombol <strong>Mainkan</strong> di halaman depan untuk
+                      membuka game di tab baru.
+                    </p>
+                  </div>
+                  {editingGameId && (
+                    <button
+                      type="button"
+                      onClick={resetGameForm}
+                      className="text-xs font-semibold text-slate-600 hover:underline self-start sm:self-center"
+                    >
+                      Batal Edit
+                    </button>
+                  )}
+                </div>
+
+                <form onSubmit={handleSaveGame} className="mt-6 space-y-5">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div>
+                      <label
+                        htmlFor="game-title-input"
+                        className="block text-xs font-semibold text-slate-700"
+                      >
+                        Nama Game <span className="text-red-600">*</span>
+                      </label>
+                      <input
+                        id="game-title-input"
+                        type="text"
+                        value={gameTitle}
+                        onChange={(e) => setGameTitle(e.target.value)}
+                        placeholder="Contoh: Kuis Tajwid & Hafalan Juz 30"
+                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#0F6B4E] focus:outline-none focus:ring-2 focus:ring-[#0F6B4E]/15"
+                      />
+                    </div>
+
+                    <div>
+                      <label
+                        htmlFor="game-url-input"
+                        className="block text-xs font-semibold text-slate-700"
+                      >
+                        Link Game <span className="text-red-600">*</span>
+                      </label>
+                      <input
+                        id="game-url-input"
+                        type="url"
+                        value={gameUrl}
+                        onChange={(e) => setGameUrl(e.target.value)}
+                        placeholder="https://wordwall.net/resource/..."
+                        className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 font-mono text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F6B4E] focus:outline-none focus:ring-2 focus:ring-[#0F6B4E]/15"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-4">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+                      <div className="h-24 w-40 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white">
+                        {gameScreenshotPreview ? (
+                          <img
+                            src={gameScreenshotPreview}
+                            alt="Pratinjau screenshot game"
+                            referrerPolicy="no-referrer"
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full flex-col items-center justify-center text-slate-400">
+                            <ImageIcon className="h-6 w-6" aria-hidden="true" />
+                            <span className="mt-1 text-[11px]">Pratinjau</span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 space-y-2.5">
+                        <p className="text-xs font-semibold text-slate-800">
+                          Screenshot Game <span className="text-red-600">*</span>
+                        </p>
+                        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
+                          <label className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 whitespace-nowrap shrink-0">
+                            <Upload className="h-3.5 w-3.5" aria-hidden="true" />
+                            {gameScreenshotFile
+                              ? gameScreenshotFile.name
+                              : 'Unggah Screenshot'}
+                            <input
+                              ref={gameFileInputRef}
+                              type="file"
+                              accept="image/png,image/jpeg,image/webp"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (!file) return;
+                                setGameScreenshotFile(file);
+                                setGameScreenshotPreview(URL.createObjectURL(file));
+                              }}
+                              className="sr-only"
+                            />
+                          </label>
+                          <div className="flex-1">
+                            <label htmlFor="game-screenshot-url" className="sr-only">
+                              URL Screenshot Game (opsional)
+                            </label>
+                            <input
+                              id="game-screenshot-url"
+                              type="text"
+                              value={gameScreenshotUrl}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setGameScreenshotFile(null);
+                                setGameScreenshotUrl(val);
+                                setGameScreenshotPreview(val.trim());
+                              }}
+                              placeholder="Atau tempel URL gambar / link Google Drive"
+                              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:border-[#0F6B4E] focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="inline-flex items-center gap-2 rounded-lg bg-[#0F6B4E] px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[#0B533C] disabled:opacity-60"
+                    >
+                      <Plus className="h-4 w-4" aria-hidden="true" />
+                      {submitting
+                        ? 'Menyimpan...'
+                        : editingGameId
+                        ? 'Perbarui Game'
+                        : 'Simpan ke Game Center'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 bg-white p-6">
+                <h2 className="text-sm font-bold text-slate-900">
+                  Daftar Game Terpasang ({games.length})
+                </h2>
+
+                {games.length === 0 ? (
+                  <p className="mt-4 text-xs text-slate-500">
+                    Belum ada game. Gunakan formulir di atas untuk menambahkan game baru.
+                  </p>
+                ) : (
+                  <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    {games.map((game) => (
+                      <div
+                        key={game.id}
+                        className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50/50"
+                      >
+                        <div className="aspect-video w-full overflow-hidden bg-slate-200">
+                          {game.screenshotUrl ? (
+                            <img
+                              src={game.screenshotUrl}
+                              alt={`Screenshot ${game.title}`}
+                              referrerPolicy="no-referrer"
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center bg-[#173828] text-white">
+                              <Gamepad2 className="h-8 w-8 text-[#F2B705]" />
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-1 flex-col justify-between p-4">
+                          <div>
+                            <h3 className="text-sm font-bold text-slate-900">
+                              {game.title}
+                            </h3>
+                            <p className="mt-1 truncate font-mono text-[11px] text-slate-500">
+                              {game.gameUrl}
+                            </p>
+                          </div>
+
+                          <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3">
+                            <a
+                              href={game.gameUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-[#173828] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#0F291D]"
+                            >
+                              <Play className="h-3 w-3 fill-[#F2B705] text-[#F2B705]" />
+                              Mainkan
+                              <ExternalLink className="h-3 w-3" />
+                            </a>
+
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                aria-label={`Edit ${game.title}`}
+                                onClick={() => {
+                                  setEditingGameId(game.id);
+                                  setGameTitle(game.title);
+                                  setGameUrl(game.gameUrl);
+                                  setGameScreenshotUrl(game.screenshotUrl);
+                                  setGameScreenshotFile(null);
+                                  setGameScreenshotPreview(game.screenshotUrl);
+                                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                                }}
+                                className="rounded border border-slate-200 bg-white p-1.5 text-slate-600 hover:border-[#0F6B4E] hover:text-[#0F6B4E]"
+                              >
+                                <Edit3 className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                aria-label={`Hapus ${game.title}`}
+                                onClick={() => requestDeleteGame(game)}
+                                className="rounded border border-slate-200 bg-white p-1.5 text-red-600 hover:border-red-300 hover:bg-red-50"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Google Apps Script, Google Sheets & Google Drive Real-Time Integration */}
           {section === 'google-sheets' && (
             <div className="space-y-6 rounded-2xl border border-slate-200 bg-white p-6">
               <div className="border-b border-slate-200 pb-4">
                 <h1 className="font-display text-2xl font-bold text-slate-900">
-                  Integrasi Database Google Sheets &amp; Google Drive
+                  Integrasi Database Spreadsheet &amp; Google Apps Script
                 </h1>
                 <p className="mt-1 text-xs text-slate-600">
-                  Hubungkan akun Google Anda agar setiap pengunggahan dokumen pada 9
-                  kategori otomatis membuat berkas di Google Drive dan memperbarui
-                  baris spreadsheet secara real-time.
+                  Pilih salah satu metode: tempelkan <strong>URL Web App Google Apps Script</strong> Anda di bawah ini, atau masuk langsung menggunakan akun Google Workspace untuk sinkronisasi otomatis 9 tab kategori.
                 </p>
               </div>
 
+              {/* Method 1: Google Apps Script Web App URL */}
+              <form
+                onSubmit={(e) => handleSyncAppsScript(e)}
+                className="rounded-xl border border-emerald-200 bg-emerald-50/45 p-5"
+              >
+                <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#0F6B4E] text-white">
+                      <Link2 className="h-4 w-4" aria-hidden="true" />
+                    </div>
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-900">
+                        1. Masukkan URL Google Apps Script (Web App)
+                      </h2>
+                      <p className="mt-0.5 text-xs text-slate-600">
+                        Tempel URL deployment Apps Script (<code className="rounded bg-white px-1 py-0.5 font-mono text-[11px] text-slate-800">https://script.google.com/macros/s/.../exec</code>) agar setiap input/unggah dokumen otomatis masuk ke Google Spreadsheet Anda.
+                      </p>
+                    </div>
+                  </div>
+                  {syncInfo.appsScriptUrl && (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-900">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      URL Terpasang
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-4">
+                  <label
+                    htmlFor="apps-script-url-input"
+                    className="block text-xs font-semibold text-slate-800"
+                  >
+                    URL Web App Google Apps Script
+                  </label>
+                  <input
+                    id="apps-script-url-input"
+                    type="url"
+                    value={appsScriptUrlInput}
+                    onChange={(e) => setAppsScriptUrlInput(e.target.value)}
+                    placeholder="https://script.google.com/macros/s/AKfycb.../exec"
+                    className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2.5 font-mono text-xs text-slate-900 placeholder:text-slate-400 focus:border-[#0F6B4E] focus:outline-none focus:ring-2 focus:ring-[#0F6B4E]/15"
+                  />
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center gap-2.5">
+                  <button
+                    type="submit"
+                    disabled={appsScriptBusy}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#0F6B4E] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0B533C] disabled:opacity-60"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    {appsScriptBusy
+                      ? 'Menghubungkan & Mengirim...'
+                      : 'Simpan & Sinkronkan Sekarang'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={appsScriptBusy}
+                    onClick={handlePullAppsScript}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-700/30 bg-white px-3.5 py-2 text-xs font-semibold text-[#0F6B4E] hover:bg-emerald-50 disabled:opacity-60"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Tarik dari Spreadsheet
+                  </button>
+                  <button
+                    type="button"
+                    disabled={appsScriptBusy}
+                    onClick={handleSaveAppsScriptUrlOnly}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    Simpan URL Saja
+                  </button>
+                  {syncInfo.appsScriptUrl && (
+                    <button
+                      type="button"
+                      disabled={appsScriptBusy}
+                      onClick={() => {
+                        setAppsScriptUrlInput('');
+                        void (async () => {
+                          const res = await fetch('/api/admin/sync-info', {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ appsScriptUrl: null }),
+                          });
+                          if (res.ok) {
+                            const data = (await res.json()) as {
+                              syncInfo: SpreadsheetSyncInfo;
+                            };
+                            onSyncInfoUpdated(data.syncInfo);
+                            setFeedback({
+                              type: 'success',
+                              message: 'URL Apps Script berhasil dihapus.',
+                            });
+                          }
+                        })();
+                      }}
+                      className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50"
+                    >
+                      Hapus URL
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setShowAppsScriptCode((prev) => !prev)}
+                    className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    <Code2 className="h-3.5 w-3.5" />
+                    {showAppsScriptCode
+                      ? 'Sembunyikan Kode Code.gs'
+                      : 'Lihat Kode Code.gs Siap Pakai'}
+                  </button>
+                </div>
+
+                {showAppsScriptCode && (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-900 p-4 text-slate-100">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700 pb-2.5">
+                      <p className="text-xs font-medium text-slate-300">
+                        Salin kode ini ke Google Spreadsheet → Ekstensi → Apps Script → Deploy sebagai Web App (Akses: Anyone / Siapa saja)
+                      </p>
+                      <button
+                        type="button"
+                        onClick={handleCopyAppsScriptCode}
+                        className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500"
+                      >
+                        {copiedCode ? (
+                          <>
+                            <Check className="h-3.5 w-3.5" />
+                            Tersalin
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="h-3.5 w-3.5" />
+                            Salin Code.gs
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <pre className="mt-3 max-h-64 overflow-auto font-mono text-[11px] leading-relaxed text-emerald-200">
+                      {APPS_SCRIPT_CODE_TEMPLATE}
+                    </pre>
+                  </div>
+                )}
+              </form>
+
+              {/* Method 2: Direct Google Workspace OAuth */}
               <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-5">
                 <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
                   <div>
                     <p className="text-sm font-bold text-slate-900">
-                      Status Koneksi Google Workspace
+                      2. Koneksi Langsung via Google Workspace (OAuth)
                     </p>
                     <p className="mt-1 text-xs text-slate-600">
                       {googleUser
                         ? `Terhubung sebagai ${googleUser.email}`
-                        : 'Belum masuk ke Google Workspace pada sesi browser ini.'}
+                        : 'Alternatif tanpa Apps Script: buat Spreadsheet 9 tab & unggah berkas ke Google Drive langsung dengan akun Google.'}
                     </p>
                   </div>
 
@@ -1310,8 +2103,10 @@ export function AdminDashboard({
                   </p>
                   <p className="mt-1.5 text-sm font-bold text-slate-900">
                     {syncInfo.spreadsheetId
-                      ? 'Spreadsheet Terhubung & Aktif'
-                      : 'Belum Ada Spreadsheet Google Terhubung'}
+                      ? 'Spreadsheet OAuth Terhubung'
+                      : syncInfo.appsScriptUrl
+                        ? 'Terhubung via Google Apps Script'
+                        : 'Belum Ada Spreadsheet Google Terhubung'}
                   </p>
                   {syncInfo.spreadsheetId && (
                     <p className="mt-1 truncate font-mono text-xs text-slate-500">

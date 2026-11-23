@@ -60,9 +60,19 @@ export interface AdminRecord {
 export interface SpreadsheetSyncInfo {
   spreadsheetId: string | null;
   spreadsheetUrl: string | null;
+  appsScriptUrl: string | null;
   lastSyncedAt: string | null;
   autoSyncEnabled: boolean;
   connectedEmail: string | null;
+}
+
+export interface GameItem {
+  id: string;
+  title: string;
+  gameUrl: string;
+  screenshotUrl: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface CategoryFieldConfig {

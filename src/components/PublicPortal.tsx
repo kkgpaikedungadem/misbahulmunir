@@ -9,6 +9,8 @@ import {
   FileSpreadsheet,
   FileText,
   FolderOpen,
+  Gamepad2,
+  Play,
   Search,
   User,
 } from 'lucide-react';
@@ -17,6 +19,7 @@ import {
   CATEGORIES,
   CATEGORY_MAP,
   CategoryId,
+  GameItem,
   JUZ_30_SURAHS,
   SCHOOL_BANNER_URL,
   SpreadsheetSyncInfo,
@@ -32,6 +35,7 @@ import {
 interface PublicPortalProps {
   profile: TeacherProfile;
   records: AdminRecord[];
+  games: GameItem[];
   syncInfo: SpreadsheetSyncInfo;
   onSelectRecord: (record: AdminRecord) => void;
   onOpenAdmin: () => void;
@@ -60,6 +64,7 @@ function StatusCell({ status }: { status: AdminRecord['status'] }) {
 export function PublicPortal({
   profile,
   records,
+  games,
   syncInfo,
   onSelectRecord,
   onOpenAdmin,
@@ -69,6 +74,7 @@ export function PublicPortal({
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('Semua');
   const [photoError, setPhotoError] = useState(false);
+  const [failedGameImages, setFailedGameImages] = useState<Record<string, boolean>>({});
 
   const counts = useMemo(() => getCategoryCounts(records), [records]);
   const activeConfig =
@@ -721,49 +727,125 @@ export function PublicPortal({
         </div>
       </section>
 
-      {/* Real-time Spreadsheet Integration Section */}
-      <section id="spreadsheet" className="py-14 sm:py-16">
+      {/* Game Center Section */}
+      <section id="game-center" className="py-14 sm:py-16">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-10">
-            <div className="grid grid-cols-1 gap-8 lg:grid-cols-12 lg:items-center">
-              <div className="lg:col-span-8">
-                <div className="inline-flex items-center gap-2 text-xs font-semibold text-[#0F6B4E]">
-                  <BookOpen className="h-4 w-4" aria-hidden="true" />
-                  Basis Data Spreadsheet Terintegrasi
-                </div>
-                <h2 className="mt-2 font-display text-2xl font-bold text-slate-900">
-                  Penyimpanan Otomatis 9 Tab Kategori Secara Real-Time
-                </h2>
-                <p className="mt-2.5 text-sm leading-relaxed text-slate-600">
-                  Setiap dokumen yang diunggah admin otomatis tersusun ke dalam
-                  baris tabel spreadsheet untuk masing-masing kategori (Berkas
-                  TPG hingga Rapor Tahfidz Juz 30) dan dapat dilihat maupun
-                  diunduh oleh publik.
-                </p>
+          <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+            <div>
+              <div className="inline-flex items-center gap-2 text-xs font-semibold text-[#0F6B4E]">
+                <Gamepad2 className="h-4 w-4" aria-hidden="true" />
+                Media Belajar Interaktif Anak
               </div>
-
-              <div className="flex flex-col gap-3 lg:col-span-4 lg:items-end">
+              <h2 className="mt-1.5 font-display text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+                Game Center Edukatif PAI
+              </h2>
+              <p className="mt-2 max-w-2xl text-sm text-slate-600">
+                Pilih permainan pembelajaran Pendidikan Agama Islam di bawah ini,
+                lalu klik tombol <strong>Mainkan</strong> untuk membukanya langsung
+                di tab baru.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              {syncInfo.spreadsheetUrl && (
                 <a
-                  href="/api/export/workbook"
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#173828] px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#0F291D] lg:w-auto whitespace-nowrap shrink-0"
+                  href={syncInfo.spreadsheetUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50 whitespace-nowrap"
                 >
-                  <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
-                  Unduh Database Spreadsheet (.xls)
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                  Google Sheets Live
                 </a>
-                {syncInfo.spreadsheetUrl && (
-                  <a
-                    href={syncInfo.spreadsheetUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50 lg:w-auto whitespace-nowrap shrink-0"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-                    Buka Google Sheets Live
-                  </a>
-                )}
-              </div>
+              )}
+              <a
+                href="/api/export/workbook"
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50 whitespace-nowrap"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5 text-[#0F6B4E]" aria-hidden="true" />
+                Unduh Workbook (.xls)
+              </a>
             </div>
           </div>
+
+          {games.length === 0 ? (
+            <div className="mt-8 rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+              <Gamepad2 className="mx-auto h-10 w-10 text-slate-400" aria-hidden="true" />
+              <p className="mt-3 text-sm font-semibold text-slate-800">
+                Belum ada game edukatif yang ditambahkan.
+              </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Admin dapat menambahkan nama game, link game, dan screenshot melalui
+                Dashboard Admin.
+              </p>
+              <button
+                type="button"
+                onClick={onOpenAdmin}
+                className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#173828] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0F291D]"
+              >
+                Kelola Game Center
+              </button>
+            </div>
+          ) : (
+            <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {games.map((game) => {
+                const imgBroken = Boolean(failedGameImages[game.id]);
+                return (
+                  <article
+                    key={game.id}
+                    className="group flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xs transition-shadow hover:shadow-md"
+                  >
+                    <div className="relative aspect-video w-full overflow-hidden bg-slate-100">
+                      {!imgBroken && game.screenshotUrl ? (
+                        <img
+                          src={game.screenshotUrl}
+                          alt={`Screenshot ${game.title}`}
+                          referrerPolicy="no-referrer"
+                          onError={() =>
+                            setFailedGameImages((prev) => ({
+                              ...prev,
+                              [game.id]: true,
+                            }))
+                          }
+                          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full flex-col items-center justify-center bg-[#173828] p-4 text-center text-white">
+                          <Gamepad2 className="h-10 w-10 text-[#F2B705]" aria-hidden="true" />
+                          <span className="mt-2 text-xs font-medium text-emerald-100">
+                            Game Edukatif PAI
+                          </span>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex flex-1 flex-col justify-between p-5">
+                      <div>
+                        <h3 className="font-display text-lg font-bold leading-snug text-slate-900">
+                          {game.title}
+                        </h3>
+                        <p className="mt-1.5 truncate font-mono text-[11px] text-slate-500">
+                          {game.gameUrl}
+                        </p>
+                      </div>
+
+                      <div className="mt-5 pt-2">
+                        <a
+                          href={game.gameUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#173828] px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-[#0F291D]"
+                        >
+                          <Play className="h-4 w-4 fill-[#F2B705] text-[#F2B705]" aria-hidden="true" />
+                          Mainkan
+                          <ExternalLink className="h-3.5 w-3.5 text-emerald-200" aria-hidden="true" />
+                        </a>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
         </div>
       </section>
 
@@ -778,6 +860,9 @@ export function PublicPortal({
             </a>
             <a href="#administrasi" className="hover:text-slate-800">
               Berkas Publik
+            </a>
+            <a href="#game-center" className="hover:text-slate-800">
+              Game Center
             </a>
             <button
               type="button"

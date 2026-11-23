@@ -3,8 +3,10 @@ import {
   CATEGORIES,
   CATEGORY_MAP,
   CategoryId,
+  GameItem,
   JUZ_30_SURAHS,
   RecordStatus,
+  TeacherProfile,
 } from './categories';
 
 export interface TahfidzSummary {
@@ -391,3 +393,438 @@ export function getCategoryCounts(
   }
   return counts;
 }
+
+export function isValidAppsScriptUrl(rawUrl: string): boolean {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') return false;
+    const host = parsed.hostname.toLowerCase();
+    return (
+      host === 'script.google.com' ||
+      host === 'script.googleusercontent.com'
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function normalizeExternalPhotoUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return '';
+  const fileMatch = trimmed.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (fileMatch?.[1]) {
+    return `https://drive.google.com/thumbnail?id=${fileMatch[1]}&sz=w1000`;
+  }
+  const openMatch = trimmed.match(/drive\.google\.com\/(?:open|uc)\?[^#]*id=([a-zA-Z0-9_-]+)/);
+  if (openMatch?.[1]) {
+    return `https://drive.google.com/thumbnail?id=${openMatch[1]}&sz=w1000`;
+  }
+  return trimmed;
+}
+
+export function isValidHttpUrl(rawUrl: string): boolean {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+export function validateGameInput(input: {
+  title?: string;
+  gameUrl?: string;
+  screenshotUrl?: string;
+  hasScreenshotFile?: boolean;
+}): ValidationResult {
+  const errors: string[] = [];
+  if (!input.title || !input.title.trim()) {
+    errors.push('Nama game wajib diisi.');
+  }
+  if (!input.gameUrl || !isValidHttpUrl(input.gameUrl)) {
+    errors.push('Link game wajib berupa URL valid (diawali http:// atau https://).');
+  }
+  if (!input.hasScreenshotFile && (!input.screenshotUrl || !input.screenshotUrl.trim())) {
+    errors.push('Screenshot game wajib diisi (unggah gambar atau masukkan URL screenshot).');
+  }
+  return { valid: errors.length === 0, errors };
+}
+
+export function normalizeGameItem(input: Partial<GameItem>): GameItem {
+  const now = new Date().toISOString();
+  const rawShot = (input.screenshotUrl || '').trim();
+  const normalizedShot = rawShot.startsWith('http')
+    ? normalizeExternalPhotoUrl(rawShot)
+    : rawShot;
+
+  return {
+    id: input.id || `game-${Date.now()}`,
+    title: (input.title || '').trim(),
+    gameUrl: (input.gameUrl || '').trim(),
+    screenshotUrl: normalizedShot,
+    createdAt: input.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+export interface AppsScriptSyncPayload {
+  action: 'syncAll' | 'syncCategory';
+  syncedAt: string;
+  profileSheet: {
+    sheetTabName: string;
+    rows: string[][];
+  };
+  gameSheet?: {
+    sheetTabName: string;
+    rows: string[][];
+  };
+  sheets: {
+    categoryId: CategoryId;
+    categoryName: string;
+    sheetTabName: string;
+    rows: string[][];
+  }[];
+}
+
+export function buildAppsScriptPayload(
+  profile: TeacherProfile,
+  records: AdminRecord[],
+  onlyCategoryId?: CategoryId,
+  games?: GameItem[]
+): AppsScriptSyncPayload {
+  const targetCategories = onlyCategoryId
+    ? CATEGORIES.filter((c) => c.id === onlyCategoryId)
+    : CATEGORIES;
+
+  const safePhotoUrl =
+    profile.photoUrl && profile.photoUrl.length <= 45000 ? profile.photoUrl : '';
+
+  const gameSheet = Array.isArray(games)
+    ? {
+        sheetTabName: 'Game_Center',
+        rows: [
+          ['ID', 'Nama Game', 'Link Game', 'Screenshot URL', 'Diperbarui'],
+          ...games.map((g) => [
+            g.id,
+            g.title,
+            g.gameUrl,
+            g.screenshotUrl && g.screenshotUrl.length <= 45000 ? g.screenshotUrl : '',
+            g.updatedAt,
+          ]),
+        ],
+      }
+    : undefined;
+
+  return {
+    action: onlyCategoryId ? 'syncCategory' : 'syncAll',
+    syncedAt: new Date().toISOString(),
+    profileSheet: {
+      sheetTabName: 'Profil_Guru',
+      rows: [
+        ['Atribut', 'Informasi Guru'],
+        ['Nama Lengkap', profile.fullName],
+        ['Jabatan', profile.titleRole],
+        ['Unit Kerja', profile.schoolName],
+        ['NIP', profile.nip],
+        ['NUPTK', profile.nuptk],
+        ['Sertifikasi', profile.certificationNumber],
+        ['Email', profile.email],
+        ['Lokasi', profile.location],
+        ['Diperbarui', profile.updatedAt],
+        ['Bio', profile.bio],
+        ['Motto', profile.quote],
+        ['Foto URL', safePhotoUrl],
+      ],
+    },
+    ...(gameSheet ? { gameSheet } : {}),
+    sheets: targetCategories.map((cat) => ({
+      categoryId: cat.id,
+      categoryName: cat.name,
+      sheetTabName: cat.sheetTabName,
+      rows: buildSpreadsheetSheetRows(
+        cat.id,
+        records.filter((r) => r.categoryId === cat.id)
+      ),
+    })),
+  };
+}
+
+export interface AppsScriptPullRaw {
+  ok?: boolean;
+  error?: string;
+  profileSheet?: {
+    sheetTabName?: string;
+    rows?: unknown[][];
+  };
+  gameSheet?: {
+    sheetTabName?: string;
+    rows?: unknown[][];
+  };
+  sheets?: {
+    categoryId?: string;
+    sheetTabName?: string;
+    rows?: unknown[][];
+  }[];
+}
+
+export function parseAppsScriptResponse(
+  raw: AppsScriptPullRaw,
+  fallbackProfile: TeacherProfile
+): {
+  profile: TeacherProfile;
+  records: AdminRecord[];
+  games: GameItem[];
+  hasRemoteData: boolean;
+} {
+  let profile = { ...fallbackProfile };
+  let hasRemoteProfile = false;
+
+  const profileRows = raw.profileSheet?.rows;
+  if (Array.isArray(profileRows) && profileRows.length > 1) {
+    const kv = new Map<string, string>();
+    for (let i = 1; i < profileRows.length; i++) {
+      const row = profileRows[i];
+      if (!Array.isArray(row) || row.length < 2) continue;
+      const key = String(row[0] ?? '').trim();
+      const val = String(row[1] ?? '').trim();
+      if (key) kv.set(key, val);
+    }
+    if (kv.size > 0) {
+      hasRemoteProfile = true;
+      profile = {
+        ...fallbackProfile,
+        fullName: kv.get('Nama Lengkap') || fallbackProfile.fullName,
+        titleRole: kv.get('Jabatan') || fallbackProfile.titleRole,
+        schoolName: kv.get('Unit Kerja') || fallbackProfile.schoolName,
+        nip: kv.get('NIP') || fallbackProfile.nip,
+        nuptk: kv.get('NUPTK') || fallbackProfile.nuptk,
+        certificationNumber:
+          kv.get('Sertifikasi') || fallbackProfile.certificationNumber,
+        email: kv.get('Email') || fallbackProfile.email,
+        location: kv.get('Lokasi') || fallbackProfile.location,
+        updatedAt: kv.get('Diperbarui') || fallbackProfile.updatedAt,
+        bio: kv.get('Bio') || fallbackProfile.bio,
+        quote: kv.get('Motto') || fallbackProfile.quote,
+        photoUrl: kv.get('Foto URL') || fallbackProfile.photoUrl,
+      };
+    }
+  }
+
+  const parsedGames: GameItem[] = [];
+  let hasRemoteGames = false;
+  const gameRows = raw.gameSheet?.rows;
+  if (Array.isArray(gameRows) && gameRows.length > 1) {
+    hasRemoteGames = true;
+    for (let i = 1; i < gameRows.length; i++) {
+      const cols = Array.isArray(gameRows[i])
+        ? gameRows[i].map((c) => String(c ?? ''))
+        : [];
+      const [id, title, gameUrl, screenshotUrl] = cols;
+      if (!title || !gameUrl) continue;
+      parsedGames.push(
+        normalizeGameItem({
+          id: id || undefined,
+          title,
+          gameUrl,
+          screenshotUrl: screenshotUrl || '',
+        })
+      );
+    }
+  }
+
+  const parsedRecords: AdminRecord[] = [];
+  let hasRemoteSheets = false;
+
+  if (Array.isArray(raw.sheets)) {
+    for (const sheet of raw.sheets) {
+      const matchedCat = CATEGORIES.find(
+        (c) =>
+          c.id === sheet.categoryId || c.sheetTabName === sheet.sheetTabName
+      );
+      if (!matchedCat || !Array.isArray(sheet.rows) || sheet.rows.length < 2) {
+        continue;
+      }
+      hasRemoteSheets = true;
+      for (let i = 1; i < sheet.rows.length; i++) {
+        const cols = Array.isArray(sheet.rows[i])
+          ? sheet.rows[i].map((c) => String(c ?? ''))
+          : [];
+        if (cols.every((c) => c.trim() === '')) continue;
+
+        if (matchedCat.id === 'rapor-tahfidz-juz-30') {
+          const [
+            id,
+            codeOrRef,
+            studentName,
+            studentClass,
+            surahRange,
+            surahsCompleted,
+            tajwidScore,
+            fluencyScore,
+            ,
+            academicYear,
+            semester,
+            date,
+            status,
+            summary,
+            fileRef,
+          ] = cols;
+          if (!studentName && !codeOrRef) continue;
+          const isLink =
+            fileRef &&
+            (fileRef.startsWith('http://') ||
+              fileRef.startsWith('https://') ||
+              fileRef.startsWith('/api/'));
+          parsedRecords.push(
+            normalizeRecordForCategory(matchedCat.id, {
+              id: id || undefined,
+              codeOrRef: codeOrRef || `NIS-${i}`,
+              studentName: studentName || 'Siswa',
+              studentClass: studentClass || 'Kelas VI',
+              surahRange: surahRange || 'An-Nas s.d. Ad-Duha',
+              surahsCompleted: Number(surahsCompleted) || 20,
+              tajwidScore: Number(tajwidScore) || 85,
+              fluencyScore: Number(fluencyScore) || 85,
+              academicYear: academicYear || '2026/2027',
+              semester: (semester as AdminRecord['semester']) || 'Ganjil',
+              date: date || new Date().toISOString().slice(0, 10),
+              status: (status as RecordStatus) || 'Terverifikasi',
+              summary: summary || '-',
+              fileName: isLink ? undefined : fileRef || undefined,
+              driveViewUrl: isLink ? fileRef : undefined,
+            })
+          );
+        } else {
+          const [
+            id,
+            title,
+            codeOrRef,
+            className,
+            metricValue,
+            academicYear,
+            semester,
+            date,
+            status,
+            summary,
+            fileName,
+            fileLink,
+          ] = cols;
+          if (!title && !codeOrRef) continue;
+          parsedRecords.push(
+            normalizeRecordForCategory(matchedCat.id, {
+              id: id || undefined,
+              title: title || 'Dokumen Tanpa Judul',
+              codeOrRef: codeOrRef || `REF-${i}`,
+              className: className || undefined,
+              metricValue: metricValue || undefined,
+              academicYear: academicYear || '2026/2027',
+              semester: (semester as AdminRecord['semester']) || 'Ganjil',
+              date: date || new Date().toISOString().slice(0, 10),
+              status: (status as RecordStatus) || 'Terverifikasi',
+              summary: summary || '-',
+              fileName: fileName || undefined,
+              driveViewUrl:
+                fileLink && fileLink.startsWith('http') ? fileLink : undefined,
+              fileUrl:
+                fileLink && fileLink.startsWith('/api/') ? fileLink : undefined,
+            })
+          );
+        }
+      }
+    }
+  }
+
+  return {
+    profile,
+    records: parsedRecords,
+    games: parsedGames,
+    hasRemoteData: hasRemoteProfile || hasRemoteSheets || hasRemoteGames,
+  };
+}
+
+export const APPS_SCRIPT_CODE_TEMPLATE = `var TAB_NAMES = [
+  '01_Berkas_TPG',
+  '02_Program_Ajar',
+  '03_KBM',
+  '04_Asesmen_Pelajaran',
+  '05_Analisis_Asesmen',
+  '06_Pengembangan_Diri',
+  '07_Pembiasaan_Keagamaan',
+  '08_Piloting_Sekolah',
+  '09_Rapor_Tahfidz_Juz30'
+];
+
+function doGet() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var profileSheet = ss.getSheetByName('Profil_Guru');
+    var profileRows = profileSheet ? profileSheet.getDataRange().getDisplayValues() : [];
+
+    var gameSheet = ss.getSheetByName('Game_Center');
+    var gameRows = gameSheet ? gameSheet.getDataRange().getDisplayValues() : [];
+
+    var sheets = TAB_NAMES.map(function (tabName) {
+      var sheet = ss.getSheetByName(tabName);
+      var rows = sheet ? sheet.getDataRange().getDisplayValues() : [];
+      return { sheetTabName: tabName, rows: rows };
+    });
+
+    return ContentService
+      .createTextOutput(JSON.stringify({
+        ok: true,
+        profileSheet: { sheetTabName: 'Profil_Guru', rows: profileRows },
+        gameSheet: { sheetTabName: 'Game_Center', rows: gameRows },
+        sheets: sheets
+      }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doPost(e) {
+  try {
+    var payload = JSON.parse(e.postData.contents);
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    if (payload.profileSheet && payload.profileSheet.rows) {
+      writeTab_(ss, payload.profileSheet.sheetTabName || 'Profil_Guru', payload.profileSheet.rows);
+    }
+
+    if (payload.gameSheet && payload.gameSheet.rows) {
+      writeTab_(ss, payload.gameSheet.sheetTabName || 'Game_Center', payload.gameSheet.rows);
+    }
+
+    if (Array.isArray(payload.sheets)) {
+      payload.sheets.forEach(function (sheetData) {
+        writeTab_(ss, sheetData.sheetTabName, sheetData.rows);
+      });
+    }
+
+    return ContentService
+      .createTextOutput(JSON.stringify({ ok: true, syncedAt: new Date().toISOString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService
+      .createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function writeTab_(ss, tabName, rows) {
+  var sheet = ss.getSheetByName(tabName);
+  if (!sheet) {
+    sheet = ss.insertSheet(tabName);
+  }
+  sheet.clearContents();
+  if (rows && rows.length > 0 && rows[0].length > 0) {
+    sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
+    sheet.getRange(1, 1, 1, rows[0].length).setFontWeight('bold');
+  }
+}`;

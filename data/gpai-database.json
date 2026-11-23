@@ -345,10 +345,29 @@
       "updatedAt": "2026-11-16T10:00:00.000Z"
     }
   ],
+  "games": [
+    {
+      "id": "game-001",
+      "title": "Kuis Interaktif Hafalan Juz 30 & Tajwid",
+      "gameUrl": "https://wordwall.net",
+      "screenshotUrl": "/src/assets/images/tahfidz_quran_cover_1795330623011.jpg",
+      "createdAt": "2026-11-20T08:00:00.000Z",
+      "updatedAt": "2026-11-20T08:00:00.000Z"
+    },
+    {
+      "id": "game-002",
+      "title": "Petualangan Akhlak Mulia & Rukun Islam",
+      "gameUrl": "https://quizizz.com",
+      "screenshotUrl": "/src/assets/images/school_piloting_banner_1795330623823.jpg",
+      "createdAt": "2026-11-20T08:05:00.000Z",
+      "updatedAt": "2026-11-20T08:05:00.000Z"
+    }
+  ],
   "syncInfo": {
     "spreadsheetId": null,
     "spreadsheetUrl": null,
-    "lastSyncedAt": null,
+    "appsScriptUrl": "https://script.google.com/macros/s/AKfycbzhxjptYWI7PbSL8-MbY32eSZkDXwgEBoICv9jJMO_utSOUuEM08Im59y_RRoUMYU1tow/exec",
+    "lastSyncedAt": "2026-11-23T10:10:39.478Z",
     "autoSyncEnabled": true,
     "connectedEmail": null
   }

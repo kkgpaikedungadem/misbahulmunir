@@ -5,12 +5,18 @@ import { AdminLoginModal } from './components/AdminLoginModal';
 import { Navbar } from './components/Navbar';
 import { PublicPortal } from './components/PublicPortal';
 import { RecordDetailModal } from './components/RecordDetailModal';
-import { DEFAULT_PROFILE, DEFAULT_SYNC_INFO, SEED_RECORDS } from './data/seedData';
+import {
+  DEFAULT_GAMES,
+  DEFAULT_PROFILE,
+  DEFAULT_SYNC_INFO,
+  SEED_RECORDS,
+} from './data/seedData';
 import {
   initGoogleWorkspaceAuth,
 } from './services/googleWorkspace';
 import {
   AdminRecord,
+  GameItem,
   SpreadsheetSyncInfo,
   TeacherProfile,
 } from './shared/categories';
@@ -18,6 +24,7 @@ import {
 export default function App() {
   const [profile, setProfile] = useState<TeacherProfile>(DEFAULT_PROFILE);
   const [records, setRecords] = useState<AdminRecord[]>(SEED_RECORDS);
+  const [games, setGames] = useState<GameItem[]>(DEFAULT_GAMES);
   const [syncInfo, setSyncInfo] = useState<SpreadsheetSyncInfo>(DEFAULT_SYNC_INFO);
   const [loading, setLoading] = useState(true);
 
@@ -31,23 +38,53 @@ export default function App() {
 
   useEffect(() => {
     let active = true;
+    let lastRefreshAt = 0;
+
+    const fetchLatestPortal = async (forceRemote = false) => {
+      try {
+        const endpoint = forceRemote ? '/api/portal?refresh=1' : '/api/portal';
+        const portalRes = await fetch(endpoint, { cache: 'no-store' });
+        if (active && portalRes.ok) {
+          const portalJson = (await portalRes.json()) as {
+            profile: TeacherProfile;
+            records: AdminRecord[];
+            games?: GameItem[];
+            syncInfo: SpreadsheetSyncInfo;
+          };
+          setProfile(portalJson.profile);
+          setRecords(portalJson.records);
+          if (Array.isArray(portalJson.games)) {
+            setGames(portalJson.games);
+          }
+          setSyncInfo(portalJson.syncInfo);
+          lastRefreshAt = Date.now();
+        }
+      } catch {
+        // Keep current rendered state if network temporarily unavailable
+      }
+    };
 
     const loadInitialData = async () => {
       try {
         const [portalRes, sessionRes] = await Promise.all([
-          fetch('/api/portal'),
-          fetch('/api/auth/session'),
+          fetch('/api/portal', { cache: 'no-store' }),
+          fetch('/api/auth/session', { cache: 'no-store' }),
         ]);
 
         if (active && portalRes.ok) {
           const portalJson = (await portalRes.json()) as {
             profile: TeacherProfile;
             records: AdminRecord[];
+            games?: GameItem[];
             syncInfo: SpreadsheetSyncInfo;
           };
           setProfile(portalJson.profile);
           setRecords(portalJson.records);
+          if (Array.isArray(portalJson.games)) {
+            setGames(portalJson.games);
+          }
           setSyncInfo(portalJson.syncInfo);
+          lastRefreshAt = Date.now();
         }
 
         if (active && sessionRes.ok) {
@@ -63,7 +100,15 @@ export default function App() {
       }
     };
 
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'hidden') return;
+      if (Date.now() - lastRefreshAt < 15000) return;
+      void fetchLatestPortal(true);
+    };
+
     loadInitialData();
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
 
     const unsub = initGoogleWorkspaceAuth(
       (user) => setGoogleUser(user),
@@ -72,6 +117,8 @@ export default function App() {
 
     return () => {
       active = false;
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
       unsub();
     };
   }, []);
@@ -134,6 +181,7 @@ export default function App() {
         <AdminDashboard
           profile={profile}
           records={records}
+          games={games}
           syncInfo={syncInfo}
           googleUser={googleUser}
           initialSection={targetAdminSection}
@@ -141,6 +189,7 @@ export default function App() {
           onGoogleDisconnected={() => setGoogleUser(null)}
           onProfileUpdated={setProfile}
           onRecordsUpdated={setRecords}
+          onGamesUpdated={setGames}
           onSyncInfoUpdated={setSyncInfo}
           onSelectRecord={setSelectedRecord}
           onLogout={handleLogout}
@@ -149,6 +198,7 @@ export default function App() {
         <PublicPortal
           profile={profile}
           records={records}
+          games={games}
           syncInfo={syncInfo}
           onSelectRecord={setSelectedRecord}
           onOpenAdmin={handleOpenAdmin}
