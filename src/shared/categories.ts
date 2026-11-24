@@ -141,6 +141,12 @@ export const TAHFIDZ_COVER_URL = resolveAppAssetUrl(
   '/src/assets/images/tahfidz_quran_cover_1795330623011.jpg'
 );
 
+export const DEFAULT_GOOGLE_DRIVE_FOLDER_ID =
+  '1GbJOrn4ocpzxaa5omWXS74byughU0v7H';
+
+export const DEFAULT_GOOGLE_DRIVE_FOLDER_URL =
+  'https://drive.google.com/drive/folders/1GbJOrn4ocpzxaa5omWXS74byughU0v7H?usp=drive_link';
+
 export const JUZ_30_SURAHS: string[] = [
   'An-Naba',
   "An-Nazi'at",

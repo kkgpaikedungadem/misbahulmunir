@@ -414,4 +414,8 @@ test('Google Drive ID extraction, preview/download URLs, and Apps Script DriveAp
   assert.equal(parsed.records[0].fileName, 'sktp-resmi.pdf');
   assert.ok(APPS_SCRIPT_CODE_TEMPLATE.includes('uploadDriveFile'));
   assert.ok(APPS_SCRIPT_CODE_TEMPLATE.includes('DriveApp'));
+  assert.ok(
+    APPS_SCRIPT_CODE_TEMPLATE.includes('1GbJOrn4ocpzxaa5omWXS74byughU0v7H')
+  );
+  assert.ok(APPS_SCRIPT_CODE_TEMPLATE.includes('DriveApp.getFolderById'));
 });

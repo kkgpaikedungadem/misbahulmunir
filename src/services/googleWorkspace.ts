@@ -12,6 +12,7 @@ import {
   CATEGORIES,
   CATEGORY_MAP,
   CategoryId,
+  DEFAULT_GOOGLE_DRIVE_FOLDER_ID,
   TeacherProfile,
 } from '../shared/categories';
 import { buildSpreadsheetSheetRows } from '../shared/spreadsheet';
@@ -116,17 +117,14 @@ async function ensureFolder(
   return created.id;
 }
 
-export async function uploadFileToGoogleDrive(
+async function performDriveMultipartUpload(
   accessToken: string,
-  categoryName: string,
+  parentFolderId: string,
   file: File
-): Promise<{ id: string; name: string; webViewLink: string }> {
-  const rootFolderId = await ensureFolder(accessToken, 'Portal Administrasi GPAI');
-  const categoryFolderId = await ensureFolder(accessToken, categoryName, rootFolderId);
-
+): Promise<Response> {
   const metadata = {
     name: file.name,
-    parents: [categoryFolderId],
+    parents: [parentFolderId],
   };
 
   const form = new FormData();
@@ -136,8 +134,8 @@ export async function uploadFileToGoogleDrive(
   );
   form.append('file', file);
 
-  const uploadRes = await fetch(
-    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink',
+  return fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,webViewLink',
     {
       method: 'POST',
       headers: {
@@ -146,6 +144,31 @@ export async function uploadFileToGoogleDrive(
       body: form,
     }
   );
+}
+
+export async function uploadFileToGoogleDrive(
+  accessToken: string,
+  categoryName: string,
+  file: File,
+  targetFolderId: string = DEFAULT_GOOGLE_DRIVE_FOLDER_ID
+): Promise<{ id: string; name: string; webViewLink: string }> {
+  let uploadRes = await performDriveMultipartUpload(
+    accessToken,
+    targetFolderId,
+    file
+  );
+
+  // With drive.file scope, pre-existing folders not created by the app may return 403/404;
+  // fall back to app-managed folder so upload still succeeds.
+  if (!uploadRes.ok && (uploadRes.status === 403 || uploadRes.status === 404)) {
+    const rootFolderId = await ensureFolder(accessToken, 'Portal Administrasi GPAI');
+    const categoryFolderId = await ensureFolder(accessToken, categoryName, rootFolderId);
+    uploadRes = await performDriveMultipartUpload(
+      accessToken,
+      categoryFolderId,
+      file
+    );
+  }
 
   if (!uploadRes.ok) {
     const errText = await uploadRes.text();

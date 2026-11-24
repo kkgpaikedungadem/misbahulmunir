@@ -3,6 +3,7 @@ import {
   CATEGORIES,
   CATEGORY_MAP,
   CategoryId,
+  DEFAULT_GOOGLE_DRIVE_FOLDER_ID,
   GameItem,
   JUZ_30_SURAHS,
   RecordStatus,
@@ -793,7 +794,9 @@ export function parseAppsScriptResponse(
   };
 }
 
-export const APPS_SCRIPT_CODE_TEMPLATE = `var TAB_NAMES = [
+export const APPS_SCRIPT_CODE_TEMPLATE = `var TARGET_DRIVE_FOLDER_ID = '${DEFAULT_GOOGLE_DRIVE_FOLDER_ID}';
+
+var TAB_NAMES = [
   '01_Berkas_TPG',
   '02_Program_Ajar',
   '03_KBM',
@@ -884,13 +887,24 @@ function getOrCreateFolder_(parentFolder, name) {
 }
 
 function uploadFileToDrive_(payload) {
-  var rootIt = DriveApp.getFoldersByName('Portal Administrasi GPAI');
-  var rootFolder = rootIt.hasNext()
-    ? rootIt.next()
-    : DriveApp.createFolder('Portal Administrasi GPAI');
-  var targetFolder = payload.categoryName
-    ? getOrCreateFolder_(rootFolder, payload.categoryName)
-    : rootFolder;
+  var folderId = payload.targetFolderId || TARGET_DRIVE_FOLDER_ID;
+  var targetFolder = null;
+  if (folderId) {
+    try {
+      targetFolder = DriveApp.getFolderById(folderId);
+    } catch (folderErr) {
+      targetFolder = null;
+    }
+  }
+  if (!targetFolder) {
+    var rootIt = DriveApp.getFoldersByName('Portal Administrasi GPAI');
+    var rootFolder = rootIt.hasNext()
+      ? rootIt.next()
+      : DriveApp.createFolder('Portal Administrasi GPAI');
+    targetFolder = payload.categoryName
+      ? getOrCreateFolder_(rootFolder, payload.categoryName)
+      : rootFolder;
+  }
 
   var raw = String(payload.base64Data || '');
   var cleanBase64 = raw.indexOf(',') >= 0 ? raw.split(',')[1] : raw;

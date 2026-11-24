@@ -10,6 +10,7 @@ import {
   AdminRecord,
   CATEGORY_MAP,
   CategoryId,
+  DEFAULT_GOOGLE_DRIVE_FOLDER_ID,
   GameItem,
   SpreadsheetSyncInfo,
   TeacherProfile,
@@ -80,6 +81,7 @@ function sanitizeStaticAssetUrl(url: string, fallback: string): string {
 }
 
 function normalizeStateAssets(state: PortalState): PortalState {
+  const isStatic = detectedBackendMode === 'static';
   return {
     ...state,
     profile: {
@@ -89,6 +91,13 @@ function normalizeStateAssets(state: PortalState): PortalState {
         DEFAULT_PROFILE.photoUrl
       ),
     },
+    records: (state.records || []).map((rec) => {
+      if (isStatic && rec.fileUrl && rec.fileUrl.startsWith('/api/')) {
+        const { fileUrl: _unreachable, ...rest } = rec;
+        return rest;
+      }
+      return rec;
+    }),
     games: (state.games || []).map((g) => ({
       ...g,
       screenshotUrl: sanitizeStaticAssetUrl(
@@ -1219,6 +1228,7 @@ export async function uploadAttachmentViaAppsScript(
       },
       body: JSON.stringify({
         action: 'uploadDriveFile',
+        targetFolderId: DEFAULT_GOOGLE_DRIVE_FOLDER_ID,
         categoryName,
         fileName,
         mimeType: mimeType || 'application/octet-stream',

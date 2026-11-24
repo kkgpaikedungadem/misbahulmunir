@@ -27,6 +27,8 @@ import {
   CATEGORIES,
   CATEGORY_MAP,
   CategoryId,
+  DEFAULT_GOOGLE_DRIVE_FOLDER_ID,
+  DEFAULT_GOOGLE_DRIVE_FOLDER_URL,
   GameItem,
   SpreadsheetSyncInfo,
   TeacherProfile,
@@ -260,33 +262,8 @@ export function AdminDashboard({
       }
 
       if (attachedFile) {
-        const accessToken = getGoogleAccessToken();
-        if (accessToken) {
-          try {
-            const uploadedDrive = await uploadFileToGoogleDrive(
-              accessToken,
-              activeConfig.name,
-              attachedFile
-            );
-            driveMeta = {
-              driveFileId: uploadedDrive.id,
-              driveViewUrl: uploadedDrive.webViewLink,
-            };
-            fileMeta = {
-              fileName: attachedFile.name,
-              fileSize: formatByteSize(attachedFile.size),
-              fileUrl: '',
-            };
-            driveUploaded = true;
-          } catch (driveErr) {
-            driveWarning =
-              driveErr instanceof Error
-                ? ` Upload Google Drive OAuth gagal (${driveErr.message}).`
-                : ' Upload Google Drive OAuth gagal.';
-          }
-        }
-
-        if (!driveUploaded && syncInfo.appsScriptUrl) {
+        let scriptNeedsUpdate = false;
+        if (syncInfo.appsScriptUrl) {
           try {
             const rawBase64 = await fileToBase64(attachedFile);
             const scriptDrive = await uploadAttachmentViaAppsScript(
@@ -308,14 +285,45 @@ export function AdminDashboard({
               };
               driveUploaded = true;
             } else if (scriptDrive.needsCodeUpdate) {
-              driveWarning +=
-                ' Agar file otomatis masuk Google Drive, perbarui Code.gs di menu Database Google Sheets atau klik "Sign in with Google".';
+              scriptNeedsUpdate = true;
             } else if (scriptDrive.error) {
               driveWarning += ` Upload Drive Apps Script dilewati (${scriptDrive.error}).`;
             }
           } catch {
-            // Fallback below
+            // Try OAuth or local fallback below
           }
+        }
+
+        const accessToken = getGoogleAccessToken();
+        if (!driveUploaded && accessToken) {
+          try {
+            const uploadedDrive = await uploadFileToGoogleDrive(
+              accessToken,
+              activeConfig.name,
+              attachedFile,
+              DEFAULT_GOOGLE_DRIVE_FOLDER_ID
+            );
+            driveMeta = {
+              driveFileId: uploadedDrive.id,
+              driveViewUrl: uploadedDrive.webViewLink,
+            };
+            fileMeta = {
+              fileName: attachedFile.name,
+              fileSize: formatByteSize(attachedFile.size),
+              fileUrl: '',
+            };
+            driveUploaded = true;
+          } catch (driveErr) {
+            driveWarning +=
+              driveErr instanceof Error
+                ? ` Upload Google Drive OAuth gagal (${driveErr.message}).`
+                : ' Upload Google Drive OAuth gagal.';
+          }
+        }
+
+        if (!driveUploaded && scriptNeedsUpdate) {
+          driveWarning +=
+            ' Agar file otomatis masuk folder Google Drive tujuan, perbarui Code.gs di menu Database Google Sheets atau klik "Sign in with Google".';
         }
 
         if (!driveUploaded) {
@@ -1270,16 +1278,25 @@ export function AdminDashboard({
                           </p>
                           <p className="text-xs text-slate-500">
                             {attachedFile
-                              ? `Terpilih: ${attachedFile.name} — otomatis masuk ke folder Portal Administrasi GPAI di Google Drive.`
+                              ? `Terpilih: ${attachedFile.name} — otomatis disimpan ke Folder Google Drive tujuan.`
                               : formValues.fileName
                               ? `Berkas tersimpan: ${formValues.fileName}${formValues.driveViewUrl ? ' (di Google Drive)' : ''}`
                               : googleUser
-                              ? `Google Drive aktif (${googleUser.email}) — file langsung diunggah ke Drive & dibagikan publik.`
-                              : 'File yang dipilih otomatis dikirim ke Google Drive via Apps Script (Code.gs) atau akun Google Anda.'}
+                              ? `Google Drive aktif (${googleUser.email}) — file otomatis disimpan ke Folder Google Drive & dibagikan publik.`
+                              : 'File yang dipilih otomatis dikirim ke Folder Google Drive tujuan via Apps Script (Code.gs) atau akun Google Anda.'}
                           </p>
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <a
+                          href={DEFAULT_GOOGLE_DRIVE_FOLDER_URL}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-700/25 bg-white px-3 py-2 text-xs font-semibold text-[#0F6B4E] hover:bg-emerald-50 whitespace-nowrap"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                          Folder Drive
+                        </a>
                         {!googleUser && (
                           <button
                             type="button"
@@ -1462,9 +1479,9 @@ export function AdminDashboard({
                                 <button
                                   type="button"
                                   onClick={() => onSelectRecord(row)}
-                                  className="rounded border border-slate-200 px-2 py-1 font-medium text-slate-700 hover:bg-slate-100"
+                                  className="rounded border border-slate-200 px-2 py-1 font-medium text-slate-700 hover:bg-slate-100 whitespace-nowrap"
                                 >
-                                  Lihat
+                                  Lihat Berkas
                                 </button>
                                 <button
                                   type="button"
@@ -2137,6 +2154,15 @@ export function AdminDashboard({
                       Hapus URL
                     </button>
                   )}
+                  <a
+                    href={DEFAULT_GOOGLE_DRIVE_FOLDER_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-700/25 bg-white px-3 py-2 text-xs font-semibold text-[#0F6B4E] hover:bg-emerald-50"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Buka Folder Drive
+                  </a>
                   <button
                     type="button"
                     onClick={() => setShowAppsScriptCode((prev) => !prev)}

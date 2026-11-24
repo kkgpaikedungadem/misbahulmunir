@@ -602,9 +602,14 @@ export function PublicPortal({
                                 {item.studentName
                                   ? `${item.studentName} (${item.studentClass || '-'})`
                                   : item.title}
-                                {item.fileName && (
+                                {(item.fileName || item.driveViewUrl) && (
                                   <span className="mt-0.5 block text-[11px] font-normal text-slate-500">
-                                    Berkas: {item.fileName}
+                                    Berkas: {item.fileName || 'Lampiran Google Drive'}
+                                    {item.driveViewUrl && (
+                                      <span className="ml-1.5 font-semibold text-[#0F6B4E]">
+                                        · Google Drive
+                                      </span>
+                                    )}
                                   </span>
                                 )}
                               </td>
