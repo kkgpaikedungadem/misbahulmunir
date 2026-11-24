@@ -15,6 +15,48 @@
   },
   "records": [
     {
+      "id": "berkas-tpg-1795521681586",
+      "categoryId": "berkas-tpg",
+      "title": "salinan (1) Keputusan Kepala BSKAP Kemendikbudristek No  032/H/KR/2024  tentang  Capaian  Pembelajaran terbaru",
+      "codeOrRef": "058/H/KR/2025",
+      "academicYear": "2026/2027",
+      "semester": "Ganjil",
+      "date": "2025-09-25",
+      "status": "Terverifikasi",
+      "summary": "BSKAP",
+      "fileName": "BSKAP-2025-058 Alur Perkembangan Kompetensi Dimensi Profil Lulusan .pdf",
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
+    },
+    {
+      "id": "berkas-tpg-1795520257557",
+      "categoryId": "berkas-tpg",
+      "title": "SK Pembagian Tugas",
+      "codeOrRef": "800/69/412.2012.326/2026",
+      "academicYear": "2026/2027",
+      "semester": "Ganjil",
+      "date": "2026-07-08",
+      "status": "Terverifikasi",
+      "summary": "SK PTM",
+      "driveViewUrl": "https://drive.google.com/drive/folders/1GbJOrn4ocpzxaa5omWXS74byughU0v7H?usp=sharing",
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
+    },
+    {
+      "id": "berkas-tpg-1795520125234",
+      "categoryId": "berkas-tpg",
+      "title": "SK Pembagian Tugas",
+      "codeOrRef": "800/69/412.2012.326/2026",
+      "academicYear": "2026/2027",
+      "semester": "Ganjil",
+      "date": "2026-07-08",
+      "status": "Terverifikasi",
+      "summary": "SK PTM",
+      "fileName": "4. Scan pdf SK Pembagian Tugas Mengajar.pdf",
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
+    },
+    {
       "id": "tpg-002",
       "categoryId": "berkas-tpg",
       "title": "Sertifikat Pendidik & Nomor Registrasi Guru (NRG)",
@@ -25,8 +67,8 @@
       "status": "Terverifikasi",
       "summary": "Salinan legalisir Sertifikat Pendidik LPTK IAIN KEDIRI",
       "fileName": "SERTIFIKAT PENDIDIK.pdf",
-      "createdAt": "2026-11-24T09:47:06.853Z",
-      "updatedAt": "2026-11-24T09:47:06.853Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "prog-001",
@@ -40,8 +82,8 @@
       "summary": "Pemetaan minggu efektif, alokasi waktu 3 JP/pekan, dan distribusi elemen Al-Qur’an Hadis, Akidah, Akhlak, Fikih, serta SPI.",
       "fileName": "Prota_Promes_PAI_2026_2027.pdf",
       "className": "Fase B & Fase C (Kelas IV–VI)",
-      "createdAt": "2026-11-24T09:47:06.853Z",
-      "updatedAt": "2026-11-24T09:47:06.853Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "prog-002",
@@ -55,8 +97,8 @@
       "summary": "Modul ajar berdiferensiasi lengkap dengan LKPD membaca tartil, memahami pesan keragaman, dan rubrik proyek poster toleransi.",
       "fileName": "Modul_Ajar_Al_Hujurat_13.docx",
       "className": "Kelas IV / Fase B",
-      "createdAt": "2026-11-24T09:47:06.853Z",
-      "updatedAt": "2026-11-24T09:47:06.853Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "kbm-001",
@@ -71,8 +113,8 @@
       "fileName": "Jurnal_KBM_Oktober_2026.pdf",
       "className": "Kelas V-A",
       "metricValue": "28/28 Hadir (100%)",
-      "createdAt": "2026-11-24T09:47:06.853Z",
-      "updatedAt": "2026-11-24T09:47:06.853Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "kbm-002",
@@ -87,8 +129,8 @@
       "fileName": "Presensi_KBM_Kelas_VB.xlsx",
       "className": "Kelas V-B",
       "metricValue": "27/28 Hadir (96%)",
-      "createdAt": "2026-11-24T09:47:06.853Z",
-      "updatedAt": "2026-11-24T09:47:06.853Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "asm-001",
@@ -103,8 +145,8 @@
       "fileName": "Paket_Soal_STS_PAI_2026.pdf",
       "className": "Kelas IV, V, dan VI",
       "metricValue": "25 PG + 5 Uraian HOTS",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "asm-002",
@@ -119,8 +161,8 @@
       "fileName": "Rubrik_Praktik_Shalat.pdf",
       "className": "Kelas IV-A & IV-B",
       "metricValue": "6 Aspek Unjuk Kerja",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "anl-001",
@@ -135,8 +177,8 @@
       "fileName": "Analisis_Hasil_STS_Kelas_V.xlsx",
       "className": "Kelas V-A (28 Siswa)",
       "metricValue": "Rata-rata 86,4 · Tuntas 92,8%",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "pd-001",
@@ -150,8 +192,8 @@
       "summary": "Diselenggarakan oleh Kemenag & KKG PAI Kecamatan Kedungadem; menghasilkan modul ajar terintegrasi deep learning.",
       "fileName": "Sertifikat_Diklat_32JP_Misbah.pdf",
       "metricValue": "32 JP",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "pd-002",
@@ -165,8 +207,8 @@
       "summary": "Penguatan pemanfaatan spreadsheet sebagai basis data portofolio capaian ibadah dan tahfidz peserta didik.",
       "fileName": "Sertifikat_Asesmen_Digital.pdf",
       "metricValue": "24 JP",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "pk-001",
@@ -180,8 +222,8 @@
       "summary": "Dilaksanakan pukul 06.45–07.15 WIB di mushalla sekolah dengan jadwal imam siswa bergilir dan kontrol presensi wali kelas.",
       "fileName": "Jurnal_Pembiasaan_Dhuha_Nov2026.pdf",
       "metricValue": "Senin–Sabtu · 97% Partisipasi",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "pk-002",
@@ -195,8 +237,8 @@
       "summary": "Menumbuhkan empati sosial peserta didik melalui pengelolaan infaq kelas untuk santunan yatim dan kegiatan sosial sekolah.",
       "fileName": "Laporan_Infaq_Jumat_2026.xlsx",
       "metricValue": "Pekanan · 100% Kelas",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "plt-001",
@@ -210,8 +252,8 @@
       "summary": "Integrasi pojok literasi Al-Qur’an di setiap kelas, duta akhlak siswa, serta pelaporan pembiasaan terhubung ke orang tua.",
       "fileName": "Proposal_Laporan_Piloting_2026.pdf",
       "metricValue": "Tahap Implementasi · 88% Tercapai",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "thf-001",
@@ -231,8 +273,8 @@
       "tajwidScore": 95,
       "fluencyScore": 94,
       "tahfidzPredicate": "Mumtaz",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "thf-002",
@@ -252,8 +294,8 @@
       "tajwidScore": 91,
       "fluencyScore": 90,
       "tahfidzPredicate": "Mumtaz",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "thf-003",
@@ -273,8 +315,8 @@
       "tajwidScore": 86,
       "fluencyScore": 84,
       "tahfidzPredicate": "Jayyid Jiddan",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     },
     {
       "id": "thf-004",
@@ -294,8 +336,8 @@
       "tajwidScore": 82,
       "fluencyScore": 79,
       "tahfidzPredicate": "Jayyid Jiddan",
-      "createdAt": "2026-11-24T09:47:06.854Z",
-      "updatedAt": "2026-11-24T09:47:06.854Z"
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     }
   ],
   "games": [
@@ -303,24 +345,24 @@
       "id": "game-001",
       "title": "Kuis Interaktif Hafalan Juz 30 & Tajwid",
       "gameUrl": "https://wordwall.net",
-      "screenshotUrl": "/src/assets/images/tahfidz_quran_cover_1795330623011.jpg",
-      "createdAt": "2026-11-20T08:00:00.000Z",
-      "updatedAt": "2026-11-20T08:00:00.000Z"
+      "screenshotUrl": "/misbahulmunir/src/assets/images/tahfidz_quran_cover_1795330623011.jpg",
+      "createdAt": "2026-11-24T12:05:57.344Z",
+      "updatedAt": "2026-11-24T12:05:57.344Z"
     },
     {
       "id": "game-002",
       "title": "Petualangan Akhlak Mulia & Rukun Islam",
       "gameUrl": "https://quizizz.com",
-      "screenshotUrl": "/src/assets/images/school_piloting_banner_1795330623823.jpg",
-      "createdAt": "2026-11-20T08:05:00.000Z",
-      "updatedAt": "2026-11-20T08:05:00.000Z"
+      "screenshotUrl": "/misbahulmunir/src/assets/images/school_piloting_banner_1795330623823.jpg",
+      "createdAt": "2026-11-24T12:05:57.345Z",
+      "updatedAt": "2026-11-24T12:05:57.345Z"
     }
   ],
   "syncInfo": {
     "spreadsheetId": null,
     "spreadsheetUrl": null,
     "appsScriptUrl": "https://script.google.com/macros/s/AKfycbzhxjptYWI7PbSL8-MbY32eSZkDXwgEBoICv9jJMO_utSOUuEM08Im59y_RRoUMYU1tow/exec",
-    "lastSyncedAt": "2026-11-24T09:47:06.854Z",
+    "lastSyncedAt": "2026-11-24T12:05:57.345Z",
     "autoSyncEnabled": true,
     "connectedEmail": null
   }

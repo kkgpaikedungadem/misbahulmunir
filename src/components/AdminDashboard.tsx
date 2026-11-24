@@ -263,7 +263,39 @@ export function AdminDashboard({
 
       if (attachedFile) {
         let scriptNeedsUpdate = false;
-        if (syncInfo.appsScriptUrl) {
+        const accessToken = getGoogleAccessToken();
+
+        if (accessToken) {
+          try {
+            const uploadedDrive = await uploadFileToGoogleDrive(
+              accessToken,
+              activeConfig.name,
+              attachedFile,
+              DEFAULT_GOOGLE_DRIVE_FOLDER_ID
+            );
+            driveMeta = {
+              driveFileId: uploadedDrive.id,
+              driveViewUrl: uploadedDrive.webViewLink,
+            };
+            fileMeta = {
+              fileName: attachedFile.name,
+              fileSize: formatByteSize(attachedFile.size),
+              fileUrl: '',
+            };
+            driveUploaded = true;
+            if (uploadedDrive.usedFallbackFolder) {
+              driveWarning +=
+                ' Catatan: akun Google Anda tidak memiliki izin edit ke folder tujuan, sehingga file disimpan di folder "Portal Administrasi GPAI".';
+            }
+          } catch (driveErr) {
+            driveWarning +=
+              driveErr instanceof Error
+                ? ` Upload Google Drive OAuth gagal (${driveErr.message}).`
+                : ' Upload Google Drive OAuth gagal.';
+          }
+        }
+
+        if (!driveUploaded && syncInfo.appsScriptUrl) {
           try {
             const rawBase64 = await fileToBase64(attachedFile);
             const scriptDrive = await uploadAttachmentViaAppsScript(
@@ -287,43 +319,16 @@ export function AdminDashboard({
             } else if (scriptDrive.needsCodeUpdate) {
               scriptNeedsUpdate = true;
             } else if (scriptDrive.error) {
-              driveWarning += ` Upload Drive Apps Script dilewati (${scriptDrive.error}).`;
+              driveWarning += ` Upload Drive Apps Script gagal (${scriptDrive.error}).`;
             }
           } catch {
-            // Try OAuth or local fallback below
+            // Local fallback below
           }
         }
 
-        const accessToken = getGoogleAccessToken();
-        if (!driveUploaded && accessToken) {
-          try {
-            const uploadedDrive = await uploadFileToGoogleDrive(
-              accessToken,
-              activeConfig.name,
-              attachedFile,
-              DEFAULT_GOOGLE_DRIVE_FOLDER_ID
-            );
-            driveMeta = {
-              driveFileId: uploadedDrive.id,
-              driveViewUrl: uploadedDrive.webViewLink,
-            };
-            fileMeta = {
-              fileName: attachedFile.name,
-              fileSize: formatByteSize(attachedFile.size),
-              fileUrl: '',
-            };
-            driveUploaded = true;
-          } catch (driveErr) {
-            driveWarning +=
-              driveErr instanceof Error
-                ? ` Upload Google Drive OAuth gagal (${driveErr.message}).`
-                : ' Upload Google Drive OAuth gagal.';
-          }
-        }
-
-        if (!driveUploaded && scriptNeedsUpdate) {
+        if (!driveUploaded && scriptNeedsUpdate && !accessToken) {
           driveWarning +=
-            ' Agar file otomatis masuk folder Google Drive tujuan, perbarui Code.gs di menu Database Google Sheets atau klik "Sign in with Google".';
+            ' Code.gs Apps Script masih versi lama (belum mendukung unggah Drive).';
         }
 
         if (!driveUploaded) {
@@ -394,14 +399,21 @@ export function AdminDashboard({
           ? ` (Catatan Apps Script: ${data.appsScriptSync.message})`
           : '';
 
-      setFeedback({
-        type: 'success',
-        message: `${
-          editingId
-            ? `Data ${activeConfig.name} berhasil diperbarui${driveSavedSuffix}${syncMsg}.`
-            : `Data & berkas baru berhasil disimpan ke ${activeConfig.name}${driveSavedSuffix}${syncMsg}.`
-        }${warnSuffix}${driveWarning}`,
-      });
+      if (attachedFile && !driveUploaded) {
+        setFeedback({
+          type: 'error',
+          message: `Data tabel tersimpan, TETAPI berkas "${attachedFile.name}" BELUM terunggah ke Google Drive.${driveWarning} Klik tombol "Sign in with Google" di formulir unggah (atau salin & Deploy New Version Code.gs di Database Google Sheets), lalu klik Edit pada baris ini untuk mengunggah ulang.`,
+        });
+      } else {
+        setFeedback({
+          type: 'success',
+          message: `${
+            editingId
+              ? `Data ${activeConfig.name} berhasil diperbarui${driveSavedSuffix}${syncMsg}.`
+              : `Data & berkas baru berhasil disimpan ke ${activeConfig.name}${driveSavedSuffix}${syncMsg}.`
+          }${warnSuffix}${driveWarning}`,
+        });
+      }
       setEditingId(null);
       setAttachedFile(null);
       setInvalidFields([]);

@@ -22,7 +22,7 @@ const auth = getAuth(app);
 
 export const WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
-  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive',
 ];
 
 const provider = new GoogleAuthProvider();
@@ -122,17 +122,29 @@ async function performDriveMultipartUpload(
   parentFolderId: string,
   file: File
 ): Promise<Response> {
-  const metadata = {
+  const boundary =
+    'gpai_drive_upload_' +
+    Date.now() +
+    '_' +
+    Math.random().toString(36).slice(2);
+  const mimeType = file.type || 'application/octet-stream';
+  const metadataJson = JSON.stringify({
     name: file.name,
+    mimeType,
     parents: [parentFolderId],
-  };
+  });
 
-  const form = new FormData();
-  form.append(
-    'metadata',
-    new Blob([JSON.stringify(metadata)], { type: 'application/json' })
-  );
-  form.append('file', file);
+  const headerPart =
+    `--${boundary}\r\n` +
+    `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+    `${metadataJson}\r\n` +
+    `--${boundary}\r\n` +
+    `Content-Type: ${mimeType}\r\n\r\n`;
+  const footerPart = `\r\n--${boundary}--`;
+  const fileBuffer = await file.arrayBuffer();
+  const bodyBlob = new Blob([headerPart, fileBuffer, footerPart], {
+    type: `multipart/related; boundary=${boundary}`,
+  });
 
   return fetch(
     'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,webViewLink',
@@ -140,8 +152,9 @@ async function performDriveMultipartUpload(
       method: 'POST',
       headers: {
         Authorization: `Bearer ${accessToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
       },
-      body: form,
+      body: bodyBlob,
     }
   );
 }
@@ -151,15 +164,21 @@ export async function uploadFileToGoogleDrive(
   categoryName: string,
   file: File,
   targetFolderId: string = DEFAULT_GOOGLE_DRIVE_FOLDER_ID
-): Promise<{ id: string; name: string; webViewLink: string }> {
+): Promise<{
+  id: string;
+  name: string;
+  webViewLink: string;
+  usedFallbackFolder?: boolean;
+}> {
+  let usedFallbackFolder = false;
   let uploadRes = await performDriveMultipartUpload(
     accessToken,
     targetFolderId,
     file
   );
 
-  // With drive.file scope, pre-existing folders not created by the app may return 403/404;
-  // fall back to app-managed folder so upload still succeeds.
+  // If the signed-in account does not have edit permission on the target folder ID,
+  // fall back to an app-created folder rather than failing completely.
   if (!uploadRes.ok && (uploadRes.status === 403 || uploadRes.status === 404)) {
     const rootFolderId = await ensureFolder(accessToken, 'Portal Administrasi GPAI');
     const categoryFolderId = await ensureFolder(accessToken, categoryName, rootFolderId);
@@ -168,6 +187,7 @@ export async function uploadFileToGoogleDrive(
       categoryFolderId,
       file
     );
+    usedFallbackFolder = true;
   }
 
   if (!uploadRes.ok) {
@@ -184,7 +204,7 @@ export async function uploadFileToGoogleDrive(
   // Allow anyone with the link to view/download so public visitors can inspect the file
   try {
     await fetch(
-      `https://www.googleapis.com/drive/v3/files/${uploaded.id}/permissions`,
+      `https://www.googleapis.com/drive/v3/files/${uploaded.id}/permissions?supportsAllDrives=true`,
       {
         method: 'POST',
         headers: {
@@ -207,6 +227,7 @@ export async function uploadFileToGoogleDrive(
     webViewLink:
       uploaded.webViewLink ||
       `https://drive.google.com/file/d/${uploaded.id}/view?usp=sharing`,
+    usedFallbackFolder,
   };
 }
 
