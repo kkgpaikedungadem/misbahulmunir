@@ -126,6 +126,9 @@ export function AdminDashboard({
   onLogout,
 }: AdminDashboardProps) {
   const [section, setSection] = useState<DashboardSection>(initialSection);
+  const isGitHubPagesHost =
+    typeof window !== 'undefined' &&
+    window.location.hostname.endsWith('.github.io');
   const [formValues, setFormValues] = useState<Partial<AdminRecord>>(() =>
     buildEmptyForm('berkas-tpg')
   );
@@ -1301,6 +1304,8 @@ export function AdminDashboard({
                               ? `Berkas tersimpan: ${formValues.fileName}${formValues.driveViewUrl ? ' (di Google Drive)' : ''}`
                               : googleUser
                               ? `Google Drive aktif (${googleUser.email}) — file otomatis disimpan ke Folder Google Drive & dibagikan publik.`
+                              : isGitHubPagesHost && syncInfo.appsScriptUrl
+                              ? 'Mode GitHub Pages aktif — cukup klik "Pilih Berkas" lalu "Simpan", file otomatis masuk Google Drive via Apps Script (tanpa perlu Sign in with Google).'
                               : 'File yang dipilih otomatis dikirim ke Folder Google Drive tujuan via Apps Script (Code.gs) atau akun Google Anda.'}
                           </p>
                         </div>
@@ -1315,7 +1320,16 @@ export function AdminDashboard({
                           <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
                           Folder Drive
                         </a>
-                        {!googleUser && (
+                        {isGitHubPagesHost && !syncInfo.appsScriptUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setSection('google-sheets')}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 hover:bg-amber-100 whitespace-nowrap"
+                          >
+                            Atur URL Apps Script
+                          </button>
+                        )}
+                        {!googleUser && !isGitHubPagesHost && (
                           <button
                             type="button"
                             onClick={handleGoogleLogin}
@@ -2234,6 +2248,8 @@ export function AdminDashboard({
                     <p className="mt-1 text-xs text-slate-600">
                       {googleUser
                         ? `Terhubung sebagai ${googleUser.email}`
+                        : isGitHubPagesHost
+                        ? `Di domain GitHub Pages (${window.location.hostname}), cukup gunakan Metode 1 (Apps Script) di atas—unggah Google Drive & sinkronisasi Spreadsheet langsung aktif tanpa Sign in with Google. (Jika ingin memakai tombol ini di GitHub Pages, tambahkan "${window.location.hostname}" pada Authorized domains di Firebase Console.)`
                         : 'Alternatif tanpa Apps Script: buat Spreadsheet 9 tab & unggah berkas ke Google Drive langsung dengan akun Google.'}
                     </p>
                   </div>
