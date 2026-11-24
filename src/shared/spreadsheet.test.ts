@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 import { CATEGORIES, JUZ_30_SURAHS, resolveAppAssetUrl } from './categories';
 import { DEFAULT_PROFILE } from '../data/seedData';
 import {
+  APPS_SCRIPT_CODE_TEMPLATE,
   buildAppsScriptPayload,
   buildExcelWorkbookXml,
+  buildGoogleDriveDownloadUrl,
+  buildGoogleDrivePreviewUrl,
   buildPublicDocumentHtml,
   buildSpreadsheetSheetRows,
   calculateTahfidzSummary,
+  extractGoogleDriveFileId,
   filterRecords,
   formatRecordsToCsv,
   isValidAppsScriptUrl,
@@ -320,4 +324,94 @@ test('buildAppsScriptPayload and parseAppsScriptResponse preserve updated teache
     driveParsed.profile.photoUrl,
     'https://drive.google.com/thumbnail?id=1PhotoTestID&sz=w1000'
   );
+});
+
+test('buildSpreadsheetSheetRows caps oversized PDF base64 links under 45k chars and round-trips compact image scans', () => {
+  const hugePdfDataUrl = `data:application/pdf;base64,${'A'.repeat(120000)}`;
+  const compactScanDataUrl = `data:image/jpeg;base64,${'B'.repeat(2400)}`;
+
+  const largePdfRecord = normalizeRecordForCategory('berkas-tpg', {
+    id: 'tpg-huge-pdf',
+    title: 'SKTP Semester Genap 2026',
+    codeOrRef: 'SKTP/2026/099',
+    academicYear: '2026/2027',
+    semester: 'Genap',
+    date: '2026-11-24',
+    status: 'Terverifikasi',
+    summary: 'SKTP lengkap',
+    fileName: 'SKTP-2026.pdf',
+    fileUrl: hugePdfDataUrl,
+  });
+
+  const compactScanRecord = normalizeRecordForCategory('berkas-tpg', {
+    id: 'tpg-scan-img',
+    title: 'Foto Scan Sertifikat Pendidik',
+    codeOrRef: 'SERDIK/2026/012',
+    academicYear: '2026/2027',
+    semester: 'Ganjil',
+    date: '2026-11-24',
+    status: 'Terverifikasi',
+    summary: 'Scan JPG terkompresi',
+    fileName: 'serdik-scan.jpg',
+    fileUrl: compactScanDataUrl,
+  });
+
+  const rows = buildSpreadsheetSheetRows('berkas-tpg', [
+    largePdfRecord,
+    compactScanRecord,
+  ]);
+  assert.equal(rows[1][10], 'SKTP-2026.pdf');
+  assert.equal(rows[1][11], '');
+  assert.equal(rows[2][10], 'serdik-scan.jpg');
+  assert.equal(rows[2][11], compactScanDataUrl);
+
+  const payload = buildAppsScriptPayload(
+    DEFAULT_PROFILE,
+    [largePdfRecord, compactScanRecord],
+    'berkas-tpg'
+  );
+  const parsed = parseAppsScriptResponse(
+    { ok: true, sheets: payload.sheets },
+    DEFAULT_PROFILE
+  );
+  assert.equal(parsed.records.length, 2);
+  assert.equal(parsed.records[0].fileName, 'SKTP-2026.pdf');
+  assert.equal(parsed.records[0].fileUrl, undefined);
+  assert.equal(parsed.records[1].fileName, 'serdik-scan.jpg');
+  assert.equal(parsed.records[1].fileUrl, compactScanDataUrl);
+});
+
+test('Google Drive ID extraction, preview/download URLs, and Apps Script DriveApp upload code work accurately', () => {
+  const driveUrl = 'https://drive.google.com/file/d/1DriveABC123xyz/view?usp=sharing';
+  assert.equal(extractGoogleDriveFileId(driveUrl), '1DriveABC123xyz');
+  assert.equal(
+    buildGoogleDrivePreviewUrl(driveUrl),
+    'https://drive.google.com/file/d/1DriveABC123xyz/preview'
+  );
+  assert.equal(
+    buildGoogleDriveDownloadUrl(driveUrl),
+    'https://drive.google.com/uc?export=download&id=1DriveABC123xyz'
+  );
+
+  const rec = normalizeRecordForCategory('berkas-tpg', {
+    id: 'tpg-drive-1',
+    title: 'SKTP Google Drive',
+    codeOrRef: 'SKTP/DRV/01',
+    academicYear: '2026/2027',
+    semester: 'Ganjil',
+    date: '2026-11-24',
+    status: 'Terverifikasi',
+    summary: 'Disimpan di Google Drive',
+    fileName: 'sktp-resmi.pdf',
+    driveFileId: '1DriveABC123xyz',
+    driveViewUrl: driveUrl,
+  });
+
+  const payload = buildAppsScriptPayload(DEFAULT_PROFILE, [rec], 'berkas-tpg');
+  const parsed = parseAppsScriptResponse({ ok: true, sheets: payload.sheets }, DEFAULT_PROFILE);
+  assert.equal(parsed.records[0].driveViewUrl, driveUrl);
+  assert.equal(parsed.records[0].driveFileId, '1DriveABC123xyz');
+  assert.equal(parsed.records[0].fileName, 'sktp-resmi.pdf');
+  assert.ok(APPS_SCRIPT_CODE_TEMPLATE.includes('uploadDriveFile'));
+  assert.ok(APPS_SCRIPT_CODE_TEMPLATE.includes('DriveApp'));
 });

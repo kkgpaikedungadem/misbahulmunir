@@ -19,6 +19,7 @@ import {
   AppsScriptPullRaw,
   buildAppsScriptPayload,
   buildExcelWorkbookXml,
+  buildGoogleDriveDownloadUrl,
   buildPublicDocumentHtml,
   formatRecordsToCsv,
   isValidAppsScriptUrl,
@@ -52,15 +53,19 @@ let detectedBackendMode: 'unknown' | 'api' | 'static' =
     ? 'static'
     : 'unknown';
 
+export function formatByteSize(bytes: number): string {
+  const sizeKb = bytes / 1024;
+  return sizeKb >= 1024
+    ? `${(sizeKb / 1024).toFixed(1).replace('.', ',')} MB`
+    : `${Math.max(1, Math.round(sizeKb))} KB`;
+}
+
 function formatBase64Size(base64Data: string): string {
   const clean = base64Data.includes(',')
     ? base64Data.split(',')[1]
     : base64Data;
   const approxBytes = Math.round((clean.length * 3) / 4);
-  const sizeKb = approxBytes / 1024;
-  return sizeKb >= 1024
-    ? `${(sizeKb / 1024).toFixed(1).replace('.', ',')} MB`
-    : `${Math.max(1, Math.round(sizeKb))} KB`;
+  return formatByteSize(approxBytes);
 }
 
 function sanitizeStaticAssetUrl(url: string, fallback: string): string {
@@ -132,11 +137,36 @@ function readStaticDb(): PortalState {
   });
 }
 
+const MAX_LOCAL_DATA_URL_CHARS = 350000;
+const MAX_SHEET_DATA_URL_CHARS = 45000;
+
+function stripOversizedFileUrls(records: AdminRecord[]): AdminRecord[] {
+  return records.map((rec) => {
+    if (
+      rec.fileUrl &&
+      rec.fileUrl.startsWith('data:') &&
+      rec.fileUrl.length > MAX_SHEET_DATA_URL_CHARS
+    ) {
+      const { fileUrl: _omitted, ...rest } = rec;
+      return rest;
+    }
+    return rec;
+  });
+}
+
 function writeStaticDb(state: PortalState): void {
   try {
     window.localStorage.setItem(STATIC_DB_KEY, JSON.stringify(state));
   } catch {
-    // Ignore storage quota overflow without crashing UI
+    try {
+      const compactedState: PortalState = {
+        ...state,
+        records: stripOversizedFileUrls(state.records),
+      };
+      window.localStorage.setItem(STATIC_DB_KEY, JSON.stringify(compactedState));
+    } catch {
+      // Ignore unrecoverable storage quota errors without crashing UI
+    }
   }
 }
 
@@ -316,11 +346,36 @@ async function pullAppsScriptFromBrowser(
       };
     }
 
+    const localFileById = new Map<string, AdminRecord>();
+    for (const localRec of currentState.records) {
+      if (localRec.fileUrl) {
+        localFileById.set(localRec.id, localRec);
+      }
+    }
+
+    const mergedRemoteRecords = parsed.records.map((remoteRec) => {
+      if (remoteRec.fileUrl) return remoteRec;
+      const localMatch = localFileById.get(remoteRec.id);
+      if (
+        localMatch?.fileUrl &&
+        (!remoteRec.fileName || localMatch.fileName === remoteRec.fileName)
+      ) {
+        return {
+          ...remoteRec,
+          fileUrl: localMatch.fileUrl,
+          fileSize: remoteRec.fileSize || localMatch.fileSize,
+        };
+      }
+      return remoteRec;
+    });
+
     const nextState = normalizeStateAssets({
       ...currentState,
       profile: parsed.profile,
       records:
-        parsed.records.length > 0 ? parsed.records : currentState.records,
+        mergedRemoteRecords.length > 0
+          ? mergedRemoteRecords
+          : currentState.records,
       games: parsed.games.length > 0 ? parsed.games : currentState.games,
       syncInfo: {
         ...currentState.syncInfo,
@@ -615,13 +670,30 @@ export async function saveAdminRecord(
     return { ok: false, error: validation.errors.join(' ') };
   }
 
-  const uploadedMeta = payload.fileUpload?.base64Data
-    ? {
-        fileName: payload.fileUpload.fileName,
-        fileUrl: payload.fileUpload.base64Data,
-        fileSize: formatBase64Size(payload.fileUpload.base64Data),
-      }
-    : {};
+  let uploadedMeta: {
+    fileName?: string;
+    fileUrl?: string;
+    fileSize?: string;
+  } = {};
+
+  if (payload.fileUpload?.base64Data && payload.fileUpload?.fileName) {
+    let resolvedDataUrl = payload.fileUpload.base64Data;
+    const rawSize = formatBase64Size(resolvedDataUrl);
+    if (resolvedDataUrl.startsWith('data:image/') && resolvedDataUrl.length > 42000) {
+      resolvedDataUrl = await compressImageDataUrlToLimit(resolvedDataUrl, {
+        maxWidth: 900,
+        maxHeight: 1200,
+        maxChars: 38000,
+      });
+    }
+    uploadedMeta = {
+      fileName: payload.fileUpload.fileName,
+      fileSize: rawSize,
+      ...(resolvedDataUrl.length <= MAX_LOCAL_DATA_URL_CHARS
+        ? { fileUrl: resolvedDataUrl }
+        : { fileUrl: existing?.fileUrl }),
+    };
+  }
 
   const savedRecord = normalizeRecordForCategory(payload.categoryId, {
     ...mergedInput,
@@ -1122,6 +1194,72 @@ export async function pullFromAppsScriptClient(
   };
 }
 
+export async function uploadAttachmentViaAppsScript(
+  appsScriptUrl: string,
+  categoryName: string,
+  fileName: string,
+  mimeType: string,
+  base64Data: string
+): Promise<{
+  ok: boolean;
+  driveFileId?: string;
+  driveViewUrl?: string;
+  needsCodeUpdate?: boolean;
+  error?: string;
+}> {
+  if (!isValidAppsScriptUrl(appsScriptUrl)) {
+    return { ok: false, error: 'URL Apps Script tidak valid.' };
+  }
+
+  try {
+    const res = await fetch(appsScriptUrl.trim(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: JSON.stringify({
+        action: 'uploadDriveFile',
+        categoryName,
+        fileName,
+        mimeType: mimeType || 'application/octet-stream',
+        base64Data,
+      }),
+      redirect: 'follow',
+    });
+
+    const rawText = await res.text();
+    if (!res.ok) {
+      return { ok: false, error: `HTTP ${res.status}` };
+    }
+    const parsed = JSON.parse(rawText) as {
+      ok?: boolean;
+      driveFileId?: string;
+      driveViewUrl?: string;
+      error?: string;
+    };
+    if (parsed.ok === false) {
+      return { ok: false, error: parsed.error || 'Apps Script gagal mengunggah ke Drive.' };
+    }
+    if (parsed.driveFileId && parsed.driveViewUrl) {
+      return {
+        ok: true,
+        driveFileId: parsed.driveFileId,
+        driveViewUrl: parsed.driveViewUrl,
+      };
+    }
+    return {
+      ok: false,
+      needsCodeUpdate: true,
+      error: 'Code.gs Apps Script perlu diperbarui agar bisa mengunggah berkas ke Google Drive.',
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Gagal menghubungi Apps Script.',
+    };
+  }
+}
+
 function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1162,6 +1300,22 @@ export function triggerDocumentDownload(
   if (record.fileUrl) {
     const a = document.createElement('a');
     a.href = record.fileUrl;
+    a.download = record.fileName || 'dokumen';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    return;
+  }
+
+  const driveDownloadUrl = buildGoogleDriveDownloadUrl(
+    record.driveViewUrl,
+    record.driveFileId
+  );
+  if (driveDownloadUrl) {
+    const a = document.createElement('a');
+    a.href = driveDownloadUrl;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
     a.download = record.fileName || 'dokumen';
     document.body.appendChild(a);
     a.click();

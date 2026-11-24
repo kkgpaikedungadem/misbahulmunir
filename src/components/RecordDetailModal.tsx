@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { triggerDocumentDownload } from '../services/portalClient';
 import { AdminRecord, CATEGORY_MAP, TeacherProfile } from '../shared/categories';
 import {
+  buildGoogleDrivePreviewUrl,
   buildPublicDocumentHtml,
   calculateTahfidzSummary,
 } from '../shared/spreadsheet';
@@ -14,13 +15,20 @@ interface RecordDetailModalProps {
 }
 
 function isImageUrl(url: string | undefined, fileName: string | undefined): boolean {
-  const target = (url || fileName || '').toLowerCase();
-  return /\.(png|jpe?g|webp|gif)(\?.*)?$/.test(target);
+  const lowerUrl = (url || '').toLowerCase();
+  if (lowerUrl.startsWith('data:image/')) return true;
+  const lowerName = (fileName || '').toLowerCase();
+  return (
+    /\.(png|jpe?g|webp|gif)(\?.*)?$/.test(lowerUrl) ||
+    /\.(png|jpe?g|webp|gif)$/.test(lowerName)
+  );
 }
 
 function isPdfUrl(url: string | undefined, fileName: string | undefined): boolean {
-  const target = (url || fileName || '').toLowerCase();
-  return /\.pdf(\?.*)?$/.test(target);
+  const lowerUrl = (url || '').toLowerCase();
+  if (lowerUrl.startsWith('data:application/pdf')) return true;
+  const lowerName = (fileName || '').toLowerCase();
+  return /\.pdf(\?.*)?$/.test(lowerUrl) || /\.pdf$/.test(lowerName);
 }
 
 export function RecordDetailModal({
@@ -43,6 +51,10 @@ export function RecordDetailModal({
     : null;
 
   const hasUploadedBinary = Boolean(record.fileUrl);
+  const drivePreviewUrl = buildGoogleDrivePreviewUrl(
+    record.driveViewUrl,
+    record.driveFileId
+  );
   const isImage = isImageUrl(record.fileUrl, record.fileName);
   const isPdf = isPdfUrl(record.fileUrl, record.fileName);
   const inlineHtmlDoc = buildPublicDocumentHtml(record, profile);
@@ -243,6 +255,12 @@ export function RecordDetailModal({
                   title={`Pratinjau ${record.fileName || record.title}`}
                   src={record.fileUrl}
                   className="h-[340px] w-full border-0"
+                />
+              ) : drivePreviewUrl ? (
+                <iframe
+                  title={`Pratinjau Google Drive ${record.fileName || record.title}`}
+                  src={drivePreviewUrl}
+                  className="h-[360px] w-full border-0"
                 />
               ) : (
                 <iframe

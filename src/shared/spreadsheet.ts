@@ -121,9 +121,9 @@ export function normalizeRecordForCategory(
     date: input.date || now.slice(0, 10),
     status: (input.status as RecordStatus) || 'Terverifikasi',
     summary: (input.summary || '').trim(),
-    fileName: input.fileName,
-    fileSize: input.fileSize,
-    fileUrl: input.fileUrl,
+    fileName: input.fileName || undefined,
+    fileSize: input.fileSize || undefined,
+    fileUrl: input.fileUrl || undefined,
     driveFileId: input.driveFileId,
     driveViewUrl: input.driveViewUrl,
     sheetSyncedAt: input.sheetSyncedAt,
@@ -182,6 +182,18 @@ function escapeCsvCell(value: unknown): string {
   return str;
 }
 
+const MAX_SPREADSHEET_CELL_CHARS = 45000;
+
+function safeSpreadsheetLink(record: AdminRecord): string {
+  if (record.driveViewUrl && record.driveViewUrl.length <= MAX_SPREADSHEET_CELL_CHARS) {
+    return record.driveViewUrl;
+  }
+  if (record.fileUrl && record.fileUrl.length <= MAX_SPREADSHEET_CELL_CHARS) {
+    return record.fileUrl;
+  }
+  return '';
+}
+
 export function buildSpreadsheetSheetRows(
   categoryId: CategoryId,
   records: AdminRecord[]
@@ -219,7 +231,7 @@ export function buildSpreadsheetSheetRows(
       r.date,
       r.status,
       r.summary,
-      r.driveViewUrl || r.fileName || '',
+      safeSpreadsheetLink(r) || r.fileName || '',
     ]);
     return [headers, ...rows];
   }
@@ -250,7 +262,7 @@ export function buildSpreadsheetSheetRows(
     r.status,
     r.summary,
     r.fileName || '',
-    r.driveViewUrl || r.fileUrl || '',
+    safeSpreadsheetLink(r),
   ]);
   return [headers, ...rows];
 }
@@ -410,16 +422,38 @@ export function isValidAppsScriptUrl(rawUrl: string): boolean {
   }
 }
 
+export function extractGoogleDriveFileId(rawUrl?: string): string | null {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) return null;
+  const fileMatch = trimmed.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (fileMatch?.[1]) return fileMatch[1];
+  const openMatch = trimmed.match(/drive\.google\.com\/(?:open|uc|thumbnail)\?[^#]*id=([a-zA-Z0-9_-]+)/);
+  if (openMatch?.[1]) return openMatch[1];
+  return null;
+}
+
+export function buildGoogleDrivePreviewUrl(
+  driveViewUrl?: string,
+  driveFileId?: string
+): string | null {
+  const id = (driveFileId || '').trim() || extractGoogleDriveFileId(driveViewUrl);
+  return id ? `https://drive.google.com/file/d/${id}/preview` : null;
+}
+
+export function buildGoogleDriveDownloadUrl(
+  driveViewUrl?: string,
+  driveFileId?: string
+): string | null {
+  const id = (driveFileId || '').trim() || extractGoogleDriveFileId(driveViewUrl);
+  return id ? `https://drive.google.com/uc?export=download&id=${id}` : null;
+}
+
 export function normalizeExternalPhotoUrl(rawUrl: string): string {
   const trimmed = rawUrl.trim();
   if (!trimmed) return '';
-  const fileMatch = trimmed.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
-  if (fileMatch?.[1]) {
-    return `https://drive.google.com/thumbnail?id=${fileMatch[1]}&sz=w1000`;
-  }
-  const openMatch = trimmed.match(/drive\.google\.com\/(?:open|uc)\?[^#]*id=([a-zA-Z0-9_-]+)/);
-  if (openMatch?.[1]) {
-    return `https://drive.google.com/thumbnail?id=${openMatch[1]}&sz=w1000`;
+  const driveId = extractGoogleDriveFileId(trimmed);
+  if (driveId) {
+    return `https://drive.google.com/thumbnail?id=${driveId}&sz=w1000`;
   }
   return trimmed;
 }
@@ -676,11 +710,12 @@ export function parseAppsScriptResponse(
             fileRef,
           ] = cols;
           if (!studentName && !codeOrRef) continue;
-          const isLink =
-            fileRef &&
-            (fileRef.startsWith('http://') ||
-              fileRef.startsWith('https://') ||
-              fileRef.startsWith('/api/'));
+          const isHttpLink =
+            Boolean(fileRef) &&
+            (fileRef.startsWith('http://') || fileRef.startsWith('https://'));
+          const isDirectFile =
+            Boolean(fileRef) &&
+            (fileRef.startsWith('/api/') || fileRef.startsWith('data:'));
           parsedRecords.push(
             normalizeRecordForCategory(matchedCat.id, {
               id: id || undefined,
@@ -696,8 +731,12 @@ export function parseAppsScriptResponse(
               date: date || new Date().toISOString().slice(0, 10),
               status: (status as RecordStatus) || 'Terverifikasi',
               summary: summary || '-',
-              fileName: isLink ? undefined : fileRef || undefined,
-              driveViewUrl: isLink ? fileRef : undefined,
+              fileName: isHttpLink || isDirectFile ? undefined : fileRef || undefined,
+              driveFileId: isHttpLink
+                ? extractGoogleDriveFileId(fileRef) || undefined
+                : undefined,
+              driveViewUrl: isHttpLink ? fileRef : undefined,
+              fileUrl: isDirectFile ? fileRef : undefined,
             })
           );
         } else {
@@ -716,6 +755,7 @@ export function parseAppsScriptResponse(
             fileLink,
           ] = cols;
           if (!title && !codeOrRef) continue;
+          const isHttp = Boolean(fileLink) && fileLink.startsWith('http');
           parsedRecords.push(
             normalizeRecordForCategory(matchedCat.id, {
               id: id || undefined,
@@ -729,10 +769,15 @@ export function parseAppsScriptResponse(
               status: (status as RecordStatus) || 'Terverifikasi',
               summary: summary || '-',
               fileName: fileName || undefined,
-              driveViewUrl:
-                fileLink && fileLink.startsWith('http') ? fileLink : undefined,
+              driveFileId: isHttp
+                ? extractGoogleDriveFileId(fileLink) || undefined
+                : undefined,
+              driveViewUrl: isHttp ? fileLink : undefined,
               fileUrl:
-                fileLink && fileLink.startsWith('/api/') ? fileLink : undefined,
+                fileLink &&
+                (fileLink.startsWith('/api/') || fileLink.startsWith('data:'))
+                  ? fileLink
+                  : undefined,
             })
           );
         }
@@ -793,6 +838,19 @@ function doGet() {
 function doPost(e) {
   try {
     var payload = JSON.parse(e.postData.contents);
+
+    if (payload.action === 'uploadDriveFile' && payload.base64Data && payload.fileName) {
+      var uploaded = uploadFileToDrive_(payload);
+      return ContentService
+        .createTextOutput(JSON.stringify({
+          ok: true,
+          driveFileId: uploaded.driveFileId,
+          driveViewUrl: uploaded.driveViewUrl,
+          fileName: uploaded.fileName
+        }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+
     var ss = SpreadsheetApp.getActiveSpreadsheet();
 
     if (payload.profileSheet && payload.profileSheet.rows) {
@@ -817,6 +875,40 @@ function doPost(e) {
       .createTextOutput(JSON.stringify({ ok: false, error: String(err) }))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+function getOrCreateFolder_(parentFolder, name) {
+  var it = parentFolder.getFoldersByName(name);
+  if (it.hasNext()) return it.next();
+  return parentFolder.createFolder(name);
+}
+
+function uploadFileToDrive_(payload) {
+  var rootIt = DriveApp.getFoldersByName('Portal Administrasi GPAI');
+  var rootFolder = rootIt.hasNext()
+    ? rootIt.next()
+    : DriveApp.createFolder('Portal Administrasi GPAI');
+  var targetFolder = payload.categoryName
+    ? getOrCreateFolder_(rootFolder, payload.categoryName)
+    : rootFolder;
+
+  var raw = String(payload.base64Data || '');
+  var cleanBase64 = raw.indexOf(',') >= 0 ? raw.split(',')[1] : raw;
+  var bytes = Utilities.base64Decode(cleanBase64);
+  var mimeType = payload.mimeType || 'application/octet-stream';
+  var blob = Utilities.newBlob(bytes, mimeType, payload.fileName);
+  var file = targetFolder.createFile(blob);
+  try {
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  } catch (permErr) {
+    // Abaikan jika domain Google Workspace membatasi sharing publik
+  }
+  var fileId = file.getId();
+  return {
+    driveFileId: fileId,
+    driveViewUrl: 'https://drive.google.com/file/d/' + fileId + '/view?usp=sharing',
+    fileName: file.getName()
+  };
 }
 
 function writeTab_(ss, tabName, rows) {

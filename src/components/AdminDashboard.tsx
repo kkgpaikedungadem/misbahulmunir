@@ -37,6 +37,7 @@ import {
   filterRecords,
   getCategoryCounts,
   isValidAppsScriptUrl,
+  validateDocumentInput,
 } from '../shared/spreadsheet';
 import {
   createMasterSpreadsheet,
@@ -49,6 +50,7 @@ import {
 import {
   deleteAdminRecord,
   deleteGameItem,
+  formatByteSize,
   importCsvToCategory,
   pullFromAppsScriptClient,
   saveAdminRecord,
@@ -57,6 +59,7 @@ import {
   syncToAppsScript,
   triggerCategoryCsvDownload,
   updateSyncInfoState,
+  uploadAttachmentViaAppsScript,
 } from '../services/portalClient';
 import { compressImageFileToDataUrl } from '../utils/imageCompression';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -126,6 +129,7 @@ export function AdminDashboard({
   );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [invalidFields, setInvalidFields] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{
@@ -206,6 +210,7 @@ export function AdminDashboard({
     setSection(catId);
     setEditingId(null);
     setAttachedFile(null);
+    setInvalidFields([]);
     setFormValues(buildEmptyForm(catId));
     setSearchQuery('');
     setFeedback(null);
@@ -214,32 +219,120 @@ export function AdminDashboard({
   const handleSaveRecord = async (e: FormEvent) => {
     e.preventDefault();
     setFeedback(null);
+
+    const missingKeys: string[] = [];
+    for (const field of activeConfig.fields) {
+      if (!field.required) continue;
+      const raw = formValues[field.key];
+      if (field.type === 'number') {
+        if (raw === undefined || raw === null || raw === '' || Number.isNaN(Number(raw))) {
+          missingKeys.push(String(field.key));
+        }
+      } else if (typeof raw !== 'string' || raw.trim().length === 0) {
+        missingKeys.push(String(field.key));
+      }
+    }
+
+    const clientValidation = validateDocumentInput(activeCategoryId, formValues);
+    if (!clientValidation.valid || missingKeys.length > 0) {
+      setInvalidFields(missingKeys);
+      setFeedback({
+        type: 'error',
+        message:
+          clientValidation.errors.join(' ') ||
+          'Lengkapi semua kolom wajib bertanda bintang (*) sebelum menyimpan.',
+      });
+      return;
+    }
+
+    setInvalidFields([]);
     setSubmitting(true);
 
     try {
       let fileUpload: { fileName: string; base64Data: string } | undefined;
+      let fileMeta: { fileName?: string; fileSize?: string; fileUrl?: string } = {};
       let driveMeta: { driveFileId?: string; driveViewUrl?: string } = {};
+      let driveWarning = '';
+      let driveUploaded = false;
+
+      if (formValues.driveViewUrl && formValues.driveViewUrl.trim()) {
+        driveMeta.driveViewUrl = formValues.driveViewUrl.trim();
+      }
 
       if (attachedFile) {
-        const base64Data = await fileToBase64(attachedFile);
-        fileUpload = { fileName: attachedFile.name, base64Data };
-
         const accessToken = getGoogleAccessToken();
-        if (accessToken && syncInfo.autoSyncEnabled) {
-          const uploadedDrive = await uploadFileToGoogleDrive(
-            accessToken,
-            activeConfig.name,
-            attachedFile
-          );
-          driveMeta = {
-            driveFileId: uploadedDrive.id,
-            driveViewUrl: uploadedDrive.webViewLink,
-          };
+        if (accessToken) {
+          try {
+            const uploadedDrive = await uploadFileToGoogleDrive(
+              accessToken,
+              activeConfig.name,
+              attachedFile
+            );
+            driveMeta = {
+              driveFileId: uploadedDrive.id,
+              driveViewUrl: uploadedDrive.webViewLink,
+            };
+            fileMeta = {
+              fileName: attachedFile.name,
+              fileSize: formatByteSize(attachedFile.size),
+              fileUrl: '',
+            };
+            driveUploaded = true;
+          } catch (driveErr) {
+            driveWarning =
+              driveErr instanceof Error
+                ? ` Upload Google Drive OAuth gagal (${driveErr.message}).`
+                : ' Upload Google Drive OAuth gagal.';
+          }
+        }
+
+        if (!driveUploaded && syncInfo.appsScriptUrl) {
+          try {
+            const rawBase64 = await fileToBase64(attachedFile);
+            const scriptDrive = await uploadAttachmentViaAppsScript(
+              syncInfo.appsScriptUrl,
+              activeConfig.name,
+              attachedFile.name,
+              attachedFile.type,
+              rawBase64
+            );
+            if (scriptDrive.ok && scriptDrive.driveViewUrl) {
+              driveMeta = {
+                driveFileId: scriptDrive.driveFileId,
+                driveViewUrl: scriptDrive.driveViewUrl,
+              };
+              fileMeta = {
+                fileName: attachedFile.name,
+                fileSize: formatByteSize(attachedFile.size),
+                fileUrl: '',
+              };
+              driveUploaded = true;
+            } else if (scriptDrive.needsCodeUpdate) {
+              driveWarning +=
+                ' Agar file otomatis masuk Google Drive, perbarui Code.gs di menu Database Google Sheets atau klik "Sign in with Google".';
+            } else if (scriptDrive.error) {
+              driveWarning += ` Upload Drive Apps Script dilewati (${scriptDrive.error}).`;
+            }
+          } catch {
+            // Fallback below
+          }
+        }
+
+        if (!driveUploaded) {
+          const base64Data = attachedFile.type.startsWith('image/')
+            ? await compressImageFileToDataUrl(attachedFile, {
+                maxWidth: 900,
+                maxHeight: 1200,
+                maxChars: 38000,
+              })
+            : await fileToBase64(attachedFile);
+          fileUpload = { fileName: attachedFile.name, base64Data };
         }
       }
 
       const payload = {
         ...formValues,
+        ...fileMeta,
         ...driveMeta,
         categoryId: activeCategoryId,
         ...(fileUpload ? { fileUpload } : {}),
@@ -263,21 +356,30 @@ export function AdminDashboard({
       const accessToken = getGoogleAccessToken();
       let syncMsg = '';
       if (accessToken && syncInfo.spreadsheetId && syncInfo.autoSyncEnabled) {
-        await syncCategoryTabToGoogleSheet(
-          accessToken,
-          syncInfo.spreadsheetId,
-          activeCategoryId,
-          data.records
-        );
-        const nowIso = new Date().toISOString();
-        const syncRes = await updateSyncInfoState({ lastSyncedAt: nowIso });
-        if (syncRes.ok && syncRes.syncInfo) {
-          onSyncInfoUpdated(syncRes.syncInfo);
+        try {
+          await syncCategoryTabToGoogleSheet(
+            accessToken,
+            syncInfo.spreadsheetId,
+            activeCategoryId,
+            data.records
+          );
+          const nowIso = new Date().toISOString();
+          const syncRes = await updateSyncInfoState({ lastSyncedAt: nowIso });
+          if (syncRes.ok && syncRes.syncInfo) {
+            onSyncInfoUpdated(syncRes.syncInfo);
+          }
+          syncMsg = ' & tersinkron real-time ke Google Sheets';
+        } catch {
+          driveWarning +=
+            ' Sinkronisasi Google Sheets langsung dilewati (silakan login Google ulang jika perlu).';
         }
-        syncMsg = ' & tersinkron real-time ke Google Sheets';
       } else if (data.appsScriptSync?.ok) {
         syncMsg = ' & tersinkron otomatis ke URL Apps Script';
       }
+
+      const driveSavedSuffix = driveUploaded
+        ? ' (berkas tersimpan di Google Drive)'
+        : '';
 
       const warnSuffix =
         data.appsScriptSync && !data.appsScriptSync.ok
@@ -288,12 +390,13 @@ export function AdminDashboard({
         type: 'success',
         message: `${
           editingId
-            ? `Data ${activeConfig.name} berhasil diperbarui${syncMsg}.`
-            : `Data & berkas baru berhasil diunggah otomatis ke tab ${activeConfig.name}${syncMsg}.`
-        }${warnSuffix}`,
+            ? `Data ${activeConfig.name} berhasil diperbarui${driveSavedSuffix}${syncMsg}.`
+            : `Data & berkas baru berhasil disimpan ke ${activeConfig.name}${driveSavedSuffix}${syncMsg}.`
+        }${warnSuffix}${driveWarning}`,
       });
       setEditingId(null);
       setAttachedFile(null);
+      setInvalidFields([]);
       setFormValues(buildEmptyForm(activeCategoryId));
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err) {
@@ -1040,6 +1143,10 @@ export function AdminDashboard({
                         rawValue !== undefined && rawValue !== null
                           ? String(rawValue)
                           : '';
+                      const isInvalid = invalidFields.includes(String(field.key));
+                      const fieldBorderClass = isInvalid
+                        ? 'border-red-500 ring-2 ring-red-500/15'
+                        : 'border-slate-300 focus:border-[#0F6B4E] focus:ring-[#0F6B4E]/15';
 
                       if (field.type === 'textarea') {
                         return (
@@ -1057,14 +1164,18 @@ export function AdminDashboard({
                               id={fieldId}
                               rows={3}
                               value={value}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                const nextVal = e.target.value;
+                                setInvalidFields((prev) =>
+                                  prev.filter((k) => k !== String(field.key))
+                                );
                                 setFormValues((prev) => ({
                                   ...prev,
-                                  [field.key]: e.target.value,
-                                }))
-                              }
+                                  [field.key]: nextVal,
+                                }));
+                              }}
                               placeholder={field.placeholder}
-                              className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#0F6B4E] focus:outline-none focus:ring-2 focus:ring-[#0F6B4E]/15"
+                              className={`mt-1.5 w-full rounded-lg border bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 ${fieldBorderClass}`}
                             />
                           </div>
                         );
@@ -1085,13 +1196,17 @@ export function AdminDashboard({
                             <select
                               id={fieldId}
                               value={value || field.options?.[0] || ''}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                const nextVal = e.target.value;
+                                setInvalidFields((prev) =>
+                                  prev.filter((k) => k !== String(field.key))
+                                );
                                 setFormValues((prev) => ({
                                   ...prev,
-                                  [field.key]: e.target.value,
-                                }))
-                              }
-                              className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 focus:border-[#0F6B4E] focus:outline-none focus:ring-2 focus:ring-[#0F6B4E]/15"
+                                  [field.key]: nextVal,
+                                }));
+                              }}
+                              className={`mt-1.5 w-full rounded-lg border bg-white px-3.5 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 ${fieldBorderClass}`}
                             >
                               {field.options?.map((opt) => (
                                 <option key={opt} value={opt}>
@@ -1118,27 +1233,31 @@ export function AdminDashboard({
                             id={fieldId}
                             type={field.type}
                             value={value}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const rawInput = e.target.value;
+                              setInvalidFields((prev) =>
+                                prev.filter((k) => k !== String(field.key))
+                              );
                               setFormValues((prev) => ({
                                 ...prev,
                                 [field.key]:
                                   field.type === 'number'
-                                    ? e.target.value === ''
+                                    ? rawInput === ''
                                       ? undefined
-                                      : Number(e.target.value)
-                                    : e.target.value,
-                              }))
-                            }
+                                      : Number(rawInput)
+                                    : rawInput,
+                              }));
+                            }}
                             placeholder={field.placeholder}
-                            className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-[#0F6B4E] focus:outline-none focus:ring-2 focus:ring-[#0F6B4E]/15"
+                            className={`mt-1.5 w-full rounded-lg border bg-white px-3.5 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 ${fieldBorderClass}`}
                           />
                         </div>
                       );
                     })}
                   </div>
 
-                  {/* Auto-Upload File Attachment Box */}
-                  <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-4">
+                  {/* Auto-Upload File Attachment Box (Google Drive) */}
+                  <div className="space-y-3 rounded-xl border border-dashed border-slate-300 bg-slate-50/70 p-4">
                     <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
                       <div className="flex items-center gap-3">
                         <CloudUpload
@@ -1147,31 +1266,108 @@ export function AdminDashboard({
                         />
                         <div>
                           <p className="text-xs font-semibold text-slate-800">
-                            Lampiran Berkas Otomatis (PDF, DOCX, XLSX, Gambar)
+                            Unggah Berkas ke Google Drive (PDF, DOCX, XLSX, Gambar)
                           </p>
                           <p className="text-xs text-slate-500">
                             {attachedFile
-                              ? `Terpilih: ${attachedFile.name}`
+                              ? `Terpilih: ${attachedFile.name} — otomatis masuk ke folder Portal Administrasi GPAI di Google Drive.`
                               : formValues.fileName
-                              ? `Berkas tersimpan: ${formValues.fileName}`
-                              : 'Berkas tersimpan ke server dan otomatis diunggah ke Google Drive jika terhubung.'}
+                              ? `Berkas tersimpan: ${formValues.fileName}${formValues.driveViewUrl ? ' (di Google Drive)' : ''}`
+                              : googleUser
+                              ? `Google Drive aktif (${googleUser.email}) — file langsung diunggah ke Drive & dibagikan publik.`
+                              : 'File yang dipilih otomatis dikirim ke Google Drive via Apps Script (Code.gs) atau akun Google Anda.'}
                           </p>
                         </div>
                       </div>
-                      <label className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 whitespace-nowrap shrink-0">
-                        Pilih Berkas
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg"
-                          onChange={(e) =>
-                            setAttachedFile(e.target.files?.[0] || null)
-                          }
-                          className="sr-only"
-                        />
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {!googleUser && (
+                          <button
+                            type="button"
+                            onClick={handleGoogleLogin}
+                            disabled={googleBusy}
+                            className="gsi-material-button !h-9 !px-3 !text-xs shrink-0"
+                          >
+                            <span className="gsi-material-button-icon !h-4 !w-4">
+                              <svg className="block" version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+                                <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z" />
+                                <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z" />
+                                <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z" />
+                                <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z" />
+                                <path fill="none" d="M0 0h48v48H0z" />
+                              </svg>
+                            </span>
+                            <span>{googleBusy ? 'Menghubungkan...' : 'Sign in with Google'}</span>
+                          </button>
+                        )}
+                        {attachedFile && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAttachedFile(null);
+                              if (fileInputRef.current) fileInputRef.current.value = '';
+                            }}
+                            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                          >
+                            Batalkan Berkas
+                          </button>
+                        )}
+                        <label className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-100 whitespace-nowrap shrink-0">
+                          Pilih Berkas
+                          <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.png,.jpg,.jpeg"
+                            onChange={(e) =>
+                              setAttachedFile(e.target.files?.[0] || null)
+                            }
+                            className="sr-only"
+                          />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="border-t border-slate-200/80 pt-3">
+                      <label
+                        htmlFor={`field-${activeCategoryId}-driveViewUrl`}
+                        className="block text-[11px] font-semibold text-slate-600"
+                      >
+                        Tautan Google Drive (Terisi Otomatis Setelah Unggah, atau Tempel Manual)
                       </label>
+                      <input
+                        id={`field-${activeCategoryId}-driveViewUrl`}
+                        type="url"
+                        value={formValues.driveViewUrl || ''}
+                        onChange={(e) =>
+                          setFormValues((prev) => ({
+                            ...prev,
+                            driveViewUrl: e.target.value,
+                          }))
+                        }
+                        placeholder="https://drive.google.com/file/d/... (otomatis terisi saat upload ke Drive)"
+                        className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 font-mono text-xs text-slate-800 placeholder:text-slate-400 focus:border-[#0F6B4E] focus:outline-none"
+                      />
                     </div>
                   </div>
+
+                  {feedback && (
+                    <div
+                      role={feedback.type === 'error' ? 'alert' : 'status'}
+                      className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs font-medium sm:text-sm ${
+                        feedback.type === 'success'
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                          : 'border-red-200 bg-red-50 text-red-800'
+                      }`}
+                    >
+                      <span>{feedback.message}</span>
+                      <button
+                        type="button"
+                        onClick={() => setFeedback(null)}
+                        className="shrink-0 text-xs font-semibold underline"
+                      >
+                        Tutup
+                      </button>
+                    </div>
+                  )}
 
                   <div className="flex items-center justify-end gap-3">
                     <button
@@ -1249,9 +1445,14 @@ export function AdminDashboard({
                                   ? String(row[col.key])
                                   : '-'}
                                 {(col.key === 'title' || col.key === 'studentName') &&
-                                  row.fileName && (
+                                  (row.fileName || row.driveViewUrl) && (
                                     <span className="mt-0.5 block text-[11px] font-normal text-slate-500">
-                                      Berkas: {row.fileName}
+                                      Berkas: {row.fileName || 'Lampiran Google Drive'}
+                                      {row.driveViewUrl && (
+                                        <span className="ml-1.5 font-semibold text-[#0F6B4E]">
+                                          · Google Drive
+                                        </span>
+                                      )}
                                     </span>
                                   )}
                               </td>
@@ -1542,6 +1743,26 @@ export function AdminDashboard({
                   </div>
                 </div>
 
+                {feedback && (
+                  <div
+                    role={feedback.type === 'error' ? 'alert' : 'status'}
+                    className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs font-medium sm:text-sm ${
+                      feedback.type === 'success'
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                        : 'border-red-200 bg-red-50 text-red-800'
+                    }`}
+                  >
+                    <span>{feedback.message}</span>
+                    <button
+                      type="button"
+                      onClick={() => setFeedback(null)}
+                      className="shrink-0 text-xs font-semibold underline"
+                    >
+                      Tutup
+                    </button>
+                  </div>
+                )}
+
                 <div className="flex justify-end">
                   <button
                     type="submit"
@@ -1681,6 +1902,26 @@ export function AdminDashboard({
                       </div>
                     </div>
                   </div>
+
+                  {feedback && (
+                    <div
+                      role={feedback.type === 'error' ? 'alert' : 'status'}
+                      className={`flex items-center justify-between gap-3 rounded-xl border px-4 py-3 text-xs font-medium sm:text-sm ${
+                        feedback.type === 'success'
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                          : 'border-red-200 bg-red-50 text-red-800'
+                      }`}
+                    >
+                      <span>{feedback.message}</span>
+                      <button
+                        type="button"
+                        onClick={() => setFeedback(null)}
+                        className="shrink-0 text-xs font-semibold underline"
+                      >
+                        Tutup
+                      </button>
+                    </div>
+                  )}
 
                   <div className="flex justify-end">
                     <button

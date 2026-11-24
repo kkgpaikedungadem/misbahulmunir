@@ -152,10 +152,38 @@ export async function uploadFileToGoogleDrive(
     throw new Error(`Gagal mengunggah ke Google Drive: ${errText}`);
   }
 
-  return (await uploadRes.json()) as {
+  const uploaded = (await uploadRes.json()) as {
     id: string;
     name: string;
-    webViewLink: string;
+    webViewLink?: string;
+  };
+
+  // Allow anyone with the link to view/download so public visitors can inspect the file
+  try {
+    await fetch(
+      `https://www.googleapis.com/drive/v3/files/${uploaded.id}/permissions`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          role: 'reader',
+          type: 'anyone',
+        }),
+      }
+    );
+  } catch {
+    // Non-fatal if organization restricts public sharing
+  }
+
+  return {
+    id: uploaded.id,
+    name: uploaded.name,
+    webViewLink:
+      uploaded.webViewLink ||
+      `https://drive.google.com/file/d/${uploaded.id}/view?usp=sharing`,
   };
 }
 

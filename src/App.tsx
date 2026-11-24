@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { User as FirebaseUser } from 'firebase/auth';
 import { AdminDashboard, DashboardSection } from './components/AdminDashboard';
 import { AdminLoginModal } from './components/AdminLoginModal';
@@ -35,6 +35,8 @@ export default function App() {
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [activeView, setActiveView] = useState<'public' | 'admin'>('public');
+  const activeViewRef = useRef<'public' | 'admin'>('public');
+  activeViewRef.current = activeView;
   const [targetAdminSection, setTargetAdminSection] =
     useState<DashboardSection>('berkas-tpg');
   const [loginModalOpen, setLoginModalOpen] = useState(false);
@@ -84,6 +86,7 @@ export default function App() {
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'hidden') return;
+      if (activeViewRef.current === 'admin') return;
       if (Date.now() - lastRefreshAt < 15000) return;
       void fetchLatestPortal(true);
     };
