@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CATEGORIES, JUZ_30_SURAHS, resolveAppAssetUrl } from './categories';
+import {
+  CATEGORIES,
+  JUZ_30_SURAHS,
+  normalizeCategoryId,
+  resolveAppAssetUrl,
+} from './categories';
 import { DEFAULT_PROFILE } from '../data/seedData';
 import {
   APPS_SCRIPT_CODE_TEMPLATE,
@@ -14,6 +19,7 @@ import {
   extractGoogleDriveFileId,
   filterRecords,
   formatRecordsToCsv,
+  isTahfidzRecord,
   isValidAppsScriptUrl,
   normalizeExternalPhotoUrl,
   normalizeGameItem,
@@ -25,12 +31,33 @@ import {
   verifyStaticAdminCredentials,
 } from './spreadsheet';
 
-test('all 9 requested GPAI categories exist with unique sheet tabs', () => {
-  assert.equal(CATEGORIES.length, 9);
+test('all 14 requested GPAI categories exist in exact order with unique <=31-char sheet tabs', () => {
+  assert.equal(CATEGORIES.length, 14);
+  const expectedNames = [
+    'Profil Sekolah',
+    'Visi dan Misi',
+    'Curiculum Vitae',
+    'Program Ajar',
+    'Kegiatan KBM',
+    'Asesmen Pembelajaran',
+    'Piloting Sekolah PAIS Berkarakter',
+    'Analisa Hasil Asesmen',
+    'Pengembangan Diri',
+    'Data Siswa',
+    'Bank Soal',
+    'Pembiasaan Keagamaan',
+    'Galeri',
+    'Berkas TPG',
+  ];
+  assert.deepEqual(
+    CATEGORIES.map((c) => c.name),
+    expectedNames
+  );
   const tabNames = new Set(CATEGORIES.map((c) => c.sheetTabName));
-  assert.equal(tabNames.size, 9);
-  assert.equal(CATEGORIES[0].name, 'Berkas TPG');
-  assert.equal(CATEGORIES[8].name, 'Rapor Tahfidz Juz 30');
+  assert.equal(tabNames.size, 14);
+  for (const tab of tabNames) {
+    assert.ok(tab.length <= 31, `Tab "${tab}" exceeds 31 chars`);
+  }
 });
 
 test('validateDocumentInput rejects missing required fields and accepts complete data', () => {
@@ -80,6 +107,20 @@ test('calculateTahfidzSummary calculates predicate and Juz 30 percentage accurat
     summary: 'Catatan',
   });
   assert.equal(badScores.valid, false);
+
+  const validDataSiswa = validateDocumentInput('data-siswa', {
+    title: 'Rekap Data Siswa Kelas IV–VI',
+    codeOrRef: 'DS-2026',
+    className: 'Kelas I–VI',
+    metricValue: '168 Siswa',
+    academicYear: '2026/2027',
+    semester: 'Ganjil',
+    date: '2026-09-01',
+    status: 'Terverifikasi',
+    summary: 'Daftar siswa PAI terverifikasi.',
+  });
+  assert.equal(validDataSiswa.valid, true);
+  assert.equal(isTahfidzRecord({ title: 'Rekap Data Siswa' }), false);
 });
 
 test('CSV export and import round-trip preserves commas and quotes', () => {
@@ -107,7 +148,7 @@ test('CSV export and import round-trip preserves commas and quotes', () => {
 });
 
 test('filterRecords filters by text query and status', () => {
-  const r1 = normalizeRecordForCategory('kbm', {
+  const r1 = normalizeRecordForCategory('kegiatan-kbm', {
     id: 'kbm-1',
     title: 'Jurnal Shalat Berjamaah',
     codeOrRef: 'KBM-1',
@@ -119,7 +160,7 @@ test('filterRecords filters by text query and status', () => {
     status: 'Aktif',
     summary: 'Lancar',
   });
-  const r2 = normalizeRecordForCategory('kbm', {
+  const r2 = normalizeRecordForCategory('kegiatan-kbm', {
     id: 'kbm-2',
     title: 'Jurnal Kisah Teladan Nabi',
     codeOrRef: 'KBM-2',
@@ -151,7 +192,7 @@ test('isValidAppsScriptUrl validates Google Apps Script HTTPS Web App URLs', () 
   assert.equal(isValidAppsScriptUrl(''), false);
 });
 
-test('buildAppsScriptPayload creates full 9-tab and single-category payloads', () => {
+test('buildAppsScriptPayload creates full 14-tab and single-category payloads', () => {
   const sample = normalizeRecordForCategory('berkas-tpg', {
     id: 'tpg-test',
     title: 'SKTP Uji',
@@ -165,7 +206,7 @@ test('buildAppsScriptPayload creates full 9-tab and single-category payloads', (
 
   const full = buildAppsScriptPayload(DEFAULT_PROFILE, [sample]);
   assert.equal(full.action, 'syncAll');
-  assert.equal(full.sheets.length, 9);
+  assert.equal(full.sheets.length, 14);
   assert.equal(full.profileSheet.sheetTabName, 'Profil_Guru');
 
   const single = buildAppsScriptPayload(DEFAULT_PROFILE, [sample], 'berkas-tpg');
@@ -277,7 +318,8 @@ test('verifyStaticAdminCredentials, client export builders, and resolveAppAssetU
     summary: 'Valid & siap cetak',
   });
   const xml = buildExcelWorkbookXml([rec]);
-  assert.ok(xml.includes('01_Berkas_TPG'));
+  assert.ok(xml.includes('14_Berkas_TPG'));
+  assert.ok(xml.includes('01_Profil_Sekolah'));
   assert.ok(xml.includes('SKTP &lt;Test&gt;'));
 
   const html = buildPublicDocumentHtml(rec, DEFAULT_PROFILE);
@@ -418,4 +460,49 @@ test('Google Drive ID extraction, preview/download URLs, and Apps Script DriveAp
     APPS_SCRIPT_CODE_TEMPLATE.includes('1GbJOrn4ocpzxaa5omWXS74byughU0v7H')
   );
   assert.ok(APPS_SCRIPT_CODE_TEMPLATE.includes('DriveApp.getFolderById'));
+  assert.ok(APPS_SCRIPT_CODE_TEMPLATE.includes('01_Profil_Sekolah'));
+  assert.ok(APPS_SCRIPT_CODE_TEMPLATE.includes('14_Berkas_TPG'));
+});
+
+test('legacy categoryIds and legacy Google Sheet tabs migrate seamlessly into the 14 canonical categories', () => {
+  assert.equal(normalizeCategoryId('kbm'), 'kegiatan-kbm');
+  assert.equal(normalizeCategoryId('asesmen-pelajaran'), 'asesmen-pembelajaran');
+  assert.equal(normalizeCategoryId('analisis-hasil-asesmen'), 'analisa-hasil-asesmen');
+  assert.equal(
+    normalizeCategoryId('piloting-sekolah'),
+    'piloting-sekolah-pais-berkarakter'
+  );
+  assert.equal(normalizeCategoryId('rapor-tahfidz-juz-30'), 'data-siswa');
+
+  const legacyParsed = parseAppsScriptResponse(
+    {
+      ok: true,
+      sheets: [
+        {
+          categoryId: 'berkas-tpg',
+          sheetTabName: '01_Berkas_TPG',
+          rows: [
+            ['ID', 'Judul Dokumen', 'Nomor / Kode Referensi', 'Kelas / Sasaran', 'Capaian', 'Tahun Pelajaran', 'Semester', 'Tanggal', 'Status', 'Ringkasan', 'Nama Berkas', 'Tautan Penyimpanan'],
+            ['legacy-tpg-1', 'SKTP Lama', 'SK-01', '', '', '2026/2027', 'Ganjil', '2026-09-01', 'Terverifikasi', 'Aman', 'sktp.pdf', 'https://drive.google.com/file/d/1AbcDrive/view'],
+          ],
+        },
+        {
+          categoryId: 'rapor-tahfidz-juz-30',
+          sheetTabName: '09_Rapor_Tahfidz_Juz30',
+          rows: [
+            ['ID', 'NIS / No. Induk', 'Nama Siswa', 'Kelas', 'Rentang Surah Juz 30', 'Jumlah Surah Hafal', 'Nilai Tajwid', 'Nilai Kelancaran', 'Predikat', 'Tahun Pelajaran', 'Semester', 'Tanggal', 'Status', 'Catatan Pembimbing', 'Berkas Rapor'],
+            ['legacy-thf-1', '202601', 'Siti Aminah', 'Kelas V-A', 'An-Nas s.d. Al-Ala', '28', '92', '90', 'Mumtaz', '2026/2027', 'Ganjil', '2026-10-01', 'Terverifikasi', 'Baik', 'rapor.pdf'],
+          ],
+        },
+      ],
+    },
+    DEFAULT_PROFILE
+  );
+
+  assert.equal(legacyParsed.records.length, 2);
+  assert.equal(legacyParsed.records[0].categoryId, 'berkas-tpg');
+  assert.equal(legacyParsed.records[0].driveFileId, '1AbcDrive');
+  assert.equal(legacyParsed.records[1].categoryId, 'data-siswa');
+  assert.equal(legacyParsed.records[1].studentName, 'Siti Aminah');
+  assert.equal(isTahfidzRecord(legacyParsed.records[1]), true);
 });

@@ -25,6 +25,7 @@ import {
   SpreadsheetSyncInfo,
   TAHFIDZ_COVER_URL,
   TeacherProfile,
+  normalizeCategoryId,
   resolveAppAssetUrl,
 } from '../shared/categories';
 import {
@@ -36,6 +37,7 @@ import {
   calculateTahfidzSummary,
   filterRecords,
   getCategoryCounts,
+  isTahfidzRecord,
 } from '../shared/spreadsheet';
 
 interface PublicPortalProps {
@@ -92,7 +94,9 @@ export function PublicPortal({
 
   const categoryRecords = useMemo(() => {
     if (activeCategory === 'semua') return records;
-    return records.filter((r) => r.categoryId === activeCategory);
+    return records.filter(
+      (r) => normalizeCategoryId(r.categoryId) === activeCategory
+    );
   }, [records, activeCategory]);
 
   const filteredRecords = useMemo(
@@ -101,7 +105,7 @@ export function PublicPortal({
   );
 
   const tahfidzRecords = useMemo(
-    () => records.filter((r) => r.categoryId === 'rapor-tahfidz-juz-30'),
+    () => records.filter((r) => isTahfidzRecord(r)),
     [records]
   );
 
@@ -150,7 +154,7 @@ export function PublicPortal({
                   className="inline-flex items-center gap-2 rounded-full bg-[#F2B705] px-6 py-3 text-sm font-bold text-[#173828] shadow-lg shadow-black/20 transition-transform hover:-translate-y-0.5 hover:bg-[#F7C93B] whitespace-nowrap shrink-0"
                 >
                   <FolderOpen className="h-4 w-4" aria-hidden="true" />
-                  Lihat 9 Berkas Publik
+                  Lihat 14 Berkas Publik
                 </a>
 
                 <a
@@ -242,7 +246,7 @@ export function PublicPortal({
                     </div>
 
                     <p className="mt-2 text-[11px] font-semibold text-[#173828]">
-                      TPG · Program Ajar · KBM · Asesmen · Tahfidz Juz 30
+                      Profil Sekolah · Program Ajar · PAIS Berkarakter · Data Siswa · TPG
                     </p>
 
                     <button
@@ -276,7 +280,7 @@ export function PublicPortal({
               Kategori Administrasi
             </p>
             <p className="mt-1 font-mono text-2xl font-semibold text-slate-900 tabular-nums">
-              9 / 9 Aktif
+              14 / 14 Aktif
             </p>
           </div>
           <div>
@@ -309,7 +313,7 @@ export function PublicPortal({
                 Akses Terbuka untuk Guru, Siswa, Wali Murid &amp; Pengawas
               </p>
               <h2 className="mt-1.5 font-display text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
-                Berkas Administrasi Publik (9 Kategori)
+                Berkas Administrasi Publik (14 Kategori)
               </h2>
             </div>
             <button
@@ -372,15 +376,15 @@ export function PublicPortal({
                       : 'border-slate-200 bg-white text-slate-800 hover:border-slate-300 hover:bg-slate-50'
                   }`}
                 >
-                  <div className="min-w-0">
+                  <div className="flex min-w-0 items-baseline gap-1.5">
                     <span
-                      className={`font-mono text-xs tabular-nums ${
+                      className={`font-mono text-xs tabular-nums shrink-0 ${
                         isSelected ? 'text-[#F2B705]' : 'text-slate-400'
                       }`}
                     >
                       {cat.order}.
-                    </span>{' '}
-                    <span className="text-[13px] font-semibold whitespace-nowrap">
+                    </span>
+                    <span className="text-[13px] font-semibold leading-snug">
                       {cat.name}
                     </span>
                   </div>
@@ -404,12 +408,12 @@ export function PublicPortal({
                   <h3 className="text-lg font-bold text-slate-900">
                     {activeConfig
                       ? `${activeConfig.order}. ${activeConfig.name}`
-                      : 'Semua Berkas Administrasi Publik (9 Kategori)'}
+                      : 'Semua Berkas Administrasi Publik (14 Kategori)'}
                   </h3>
                   <p className="mt-1 text-sm text-slate-600">
                     {activeConfig
                       ? activeConfig.shortDesc
-                      : 'Seluruh dokumen TPG, Program Ajar, KBM, Asesmen, Analisis, Pengembangan Diri, Pembiasaan, Piloting, dan Rapor Tahfidz dapat dilihat dan diunduh langsung oleh masyarakat maupun rekan sejawat.'}
+                      : 'Seluruh dokumen Profil Sekolah, Visi & Misi, Curiculum Vitae, Program Ajar, Kegiatan KBM, Asesmen, Piloting PAIS Berkarakter, Analisa Asesmen, Pengembangan Diri, Data Siswa, Bank Soal, Pembiasaan, Galeri, dan Berkas TPG dapat dilihat dan diunduh langsung.'}
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2.5 shrink-0">
@@ -536,7 +540,7 @@ export function PublicPortal({
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {filteredRecords.map((item) => {
-                      const itemCat = CATEGORY_MAP[item.categoryId];
+                      const itemCat = CATEGORY_MAP[normalizeCategoryId(item.categoryId)];
 
                       return (
                         <tr

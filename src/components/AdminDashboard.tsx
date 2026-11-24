@@ -32,6 +32,7 @@ import {
   GameItem,
   SpreadsheetSyncInfo,
   TeacherProfile,
+  normalizeCategoryId,
   resolveAppAssetUrl,
 } from '../shared/categories';
 import {
@@ -115,7 +116,7 @@ export function AdminDashboard({
   games,
   syncInfo,
   googleUser,
-  initialSection = 'berkas-tpg',
+  initialSection = 'profil-sekolah',
   onGoogleConnected,
   onGoogleDisconnected,
   onProfileUpdated,
@@ -130,7 +131,7 @@ export function AdminDashboard({
     typeof window !== 'undefined' &&
     window.location.hostname.endsWith('.github.io');
   const [formValues, setFormValues] = useState<Partial<AdminRecord>>(() =>
-    buildEmptyForm('berkas-tpg')
+    buildEmptyForm('profil-sekolah')
   );
   const [editingId, setEditingId] = useState<string | null>(null);
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
@@ -198,11 +199,14 @@ export function AdminDashboard({
     section !== 'profil-guru' &&
     section !== 'game-center' &&
     section !== 'google-sheets';
-  const activeCategoryId: CategoryId = isCategorySection ? section : 'berkas-tpg';
+  const activeCategoryId: CategoryId = isCategorySection ? section : 'profil-sekolah';
   const activeConfig = CATEGORY_MAP[activeCategoryId];
 
   const categoryRecords = useMemo(
-    () => records.filter((r) => r.categoryId === activeCategoryId),
+    () =>
+      records.filter(
+        (r) => normalizeCategoryId(r.categoryId) === activeCategoryId
+      ),
     [records, activeCategoryId]
   );
 
@@ -322,7 +326,16 @@ export function AdminDashboard({
             } else if (scriptDrive.needsCodeUpdate) {
               scriptNeedsUpdate = true;
             } else if (scriptDrive.error) {
-              driveWarning += ` Upload Drive Apps Script gagal (${scriptDrive.error}).`;
+              if (
+                scriptDrive.error.includes('DriveApp') ||
+                scriptDrive.error.includes('auth/drive') ||
+                scriptDrive.error.includes('izin untuk memanggil')
+              ) {
+                driveWarning +=
+                  ' Izin Google Drive pada Apps Script Anda belum disetujui: buka editor Apps Script → pilih fungsi "izinkanAksesDrive" lalu klik Run (Jalankan) dan Izinkan akses Drive → lalu Deploy Manage deployments → Edit → New version.';
+              } else {
+                driveWarning += ` Upload Drive Apps Script gagal (${scriptDrive.error}).`;
+              }
             }
           } catch {
             // Local fallback below
@@ -719,7 +732,7 @@ export function AdminDashboard({
       setFeedback({
         type: 'success',
         message:
-          'Google Spreadsheet 9 kategori + Profil Guru berhasil dibuat dan diisi secara otomatis!',
+          'Google Spreadsheet 14 kategori + Profil Guru berhasil dibuat dan diisi secara otomatis!',
       });
     } catch (err) {
       setFeedback({
@@ -855,7 +868,7 @@ export function AdminDashboard({
         type: 'success',
         message:
           data.message ||
-          'Data profil, game center, & 9 kategori berhasil ditarik dari Google Spreadsheet!',
+          'Data profil, game center, & 14 kategori berhasil ditarik dari Google Spreadsheet!',
       });
     } catch {
       setFeedback({
@@ -1014,7 +1027,7 @@ export function AdminDashboard({
 
               <div className="my-3 border-t border-slate-200" />
               <p className="px-2.5 pb-1 text-xs font-semibold text-slate-400">
-                9 Kategori Administrasi
+                14 Kategori Administrasi
               </p>
               {CATEGORIES.map((cat) => {
                 const active = section === cat.id;
@@ -2085,7 +2098,7 @@ export function AdminDashboard({
                   Integrasi Database Spreadsheet &amp; Google Apps Script
                 </h1>
                 <p className="mt-1 text-xs text-slate-600">
-                  Pilih salah satu metode: tempelkan <strong>URL Web App Google Apps Script</strong> Anda di bawah ini, atau masuk langsung menggunakan akun Google Workspace untuk sinkronisasi otomatis 9 tab kategori.
+                  Pilih salah satu metode: tempelkan <strong>URL Web App Google Apps Script</strong> Anda di bawah ini, atau masuk langsung menggunakan akun Google Workspace untuk sinkronisasi otomatis 14 tab kategori.
                 </p>
               </div>
 
@@ -2250,7 +2263,7 @@ export function AdminDashboard({
                         ? `Terhubung sebagai ${googleUser.email}`
                         : isGitHubPagesHost
                         ? `Di domain GitHub Pages (${window.location.hostname}), cukup gunakan Metode 1 (Apps Script) di atas—unggah Google Drive & sinkronisasi Spreadsheet langsung aktif tanpa Sign in with Google. (Jika ingin memakai tombol ini di GitHub Pages, tambahkan "${window.location.hostname}" pada Authorized domains di Firebase Console.)`
-                        : 'Alternatif tanpa Apps Script: buat Spreadsheet 9 tab & unggah berkas ke Google Drive langsung dengan akun Google.'}
+                        : 'Alternatif tanpa Apps Script: buat Spreadsheet 14 tab & unggah berkas ke Google Drive langsung dengan akun Google.'}
                     </p>
                   </div>
 
@@ -2309,7 +2322,7 @@ export function AdminDashboard({
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="rounded-xl border border-slate-200 p-5">
                   <p className="text-xs font-semibold text-slate-500">
-                    Spreadsheet Master (9 Tab Kategori)
+                    Spreadsheet Master (14 Tab Kategori)
                   </p>
                   <p className="mt-1.5 text-sm font-bold text-slate-900">
                     {syncInfo.spreadsheetId
@@ -2333,7 +2346,7 @@ export function AdminDashboard({
                       <FolderSync className="h-3.5 w-3.5" />
                       {syncInfo.spreadsheetId
                         ? 'Buat Spreadsheet Baru'
-                        : 'Buat Spreadsheet 9 Tab Otomatis'}
+                        : 'Buat Spreadsheet 14 Tab Otomatis'}
                     </button>
                     {syncInfo.spreadsheetUrl && (
                       <a
@@ -2378,7 +2391,7 @@ export function AdminDashboard({
                       ? `Sinkronisasi terakhir: ${new Date(
                           syncInfo.lastSyncedAt
                         ).toLocaleString('id-ID')}`
-                      : 'Unduhan langsung Excel (.xls 9 tab) dan CSV per kategori tetap selalu tersedia.'}
+                      : 'Unduhan langsung Excel (.xls 14 tab) dan CSV per kategori tetap selalu tersedia.'}
                   </p>
                 </div>
               </div>

@@ -15,6 +15,7 @@ import {
   SpreadsheetSyncInfo,
   TeacherProfile,
   getAppBaseUrl,
+  normalizeCategoryId,
   resolveAppAssetUrl,
 } from '../shared/categories';
 import {
@@ -28,6 +29,7 @@ import {
   normalizeExternalPhotoUrl,
   normalizeGameItem,
   normalizeRecordForCategory,
+  normalizeRecordsList,
   parseAppsScriptResponse,
   parseCsvToRecords,
   validateDocumentInput,
@@ -92,7 +94,7 @@ function normalizeStateAssets(state: PortalState): PortalState {
         DEFAULT_PROFILE.photoUrl
       ),
     },
-    records: (state.records || []).map((rec) => {
+    records: normalizeRecordsList(state.records || []).map((rec) => {
       if (isStatic && rec.fileUrl && rec.fileUrl.startsWith('/api/')) {
         const { fileUrl: _unreachable, ...rest } = rec;
         return rest;
@@ -672,7 +674,12 @@ export async function saveAdminRecord(
     ? db.records.find((r) => r.id === editingId)
     : undefined;
   const mergedInput = existing
-    ? { ...existing, ...payload, id: existing.id, categoryId: existing.categoryId }
+    ? {
+        ...existing,
+        ...payload,
+        id: existing.id,
+        categoryId: normalizeCategoryId(existing.categoryId),
+      }
     : payload;
 
   const validation = validateDocumentInput(payload.categoryId, mergedInput);
@@ -1298,7 +1305,7 @@ export function triggerWorkbookDownload(records: AdminRecord[]): void {
   const xml = buildExcelWorkbookXml(records);
   downloadBlob(
     new Blob([xml], { type: 'application/vnd.ms-excel;charset=utf-8' }),
-    'Database_Administrasi_GPAI_9_Kategori.xls'
+    'Database_Administrasi_GPAI_14_Kategori.xls'
   );
 }
 
@@ -1308,7 +1315,9 @@ export function triggerCategoryCsvDownload(
 ): void {
   const config = CATEGORY_MAP[categoryId];
   if (!config) return;
-  const filtered = records.filter((r) => r.categoryId === categoryId);
+  const filtered = records.filter(
+    (r) => normalizeCategoryId(r.categoryId) === categoryId
+  );
   const csv = `\uFEFF${formatRecordsToCsv(categoryId, filtered)}`;
   downloadBlob(
     new Blob([csv], { type: 'text/csv;charset=utf-8' }),

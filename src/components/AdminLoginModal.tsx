@@ -69,7 +69,7 @@ export function AdminLoginModal({
                 Login Dashboard Admin
               </h2>
               <p className="text-xs text-slate-500">
-                Akses pengelolaan 9 kategori dokumen & database spreadsheet
+                Akses pengelolaan 14 kategori dokumen & database spreadsheet
               </p>
             </div>
           </div>

@@ -14,12 +14,14 @@ import {
   CATEGORY_MAP,
   TeacherProfile,
   getAppBaseUrl,
+  normalizeCategoryId,
   resolveAppAssetUrl,
 } from '../shared/categories';
 import {
   buildGoogleDrivePreviewUrl,
   buildPublicDocumentHtml,
   calculateTahfidzSummary,
+  isTahfidzRecord,
 } from '../shared/spreadsheet';
 
 interface RecordDetailModalProps {
@@ -60,8 +62,8 @@ export function RecordDetailModal({
 
   if (!record) return null;
 
-  const category = CATEGORY_MAP[record.categoryId];
-  const isTahfidz = record.categoryId === 'rapor-tahfidz-juz-30';
+  const category = CATEGORY_MAP[normalizeCategoryId(record.categoryId)];
+  const isTahfidz = isTahfidzRecord(record);
   const tahfidzSummary = isTahfidz
     ? calculateTahfidzSummary(
         record.tajwidScore || 0,

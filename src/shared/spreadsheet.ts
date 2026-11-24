@@ -6,8 +6,11 @@ import {
   DEFAULT_GOOGLE_DRIVE_FOLDER_ID,
   GameItem,
   JUZ_30_SURAHS,
+  LEGACY_CATEGORY_ID_MAP,
+  LEGACY_TAB_NAME_MAP,
   RecordStatus,
   TeacherProfile,
+  normalizeCategoryId,
 } from './categories';
 
 export interface TahfidzSummary {
@@ -19,6 +22,14 @@ export interface TahfidzSummary {
 export interface ValidationResult {
   valid: boolean;
   errors: string[];
+}
+
+export function isTahfidzRecord(record: Partial<AdminRecord>): boolean {
+  return Boolean(
+    record.studentName &&
+      record.tajwidScore !== undefined &&
+      record.fluencyScore !== undefined
+  );
 }
 
 export function computeTahfidzPredicate(
@@ -39,7 +50,10 @@ export function calculateTahfidzSummary(
 ): TahfidzSummary {
   const safeTajwid = Math.max(0, Math.min(100, Number(tajwidScore) || 0));
   const safeFluency = Math.max(0, Math.min(100, Number(fluencyScore) || 0));
-  const safeSurahs = Math.max(0, Math.min(JUZ_30_SURAHS.length, Number(surahsCompleted) || 0));
+  const safeSurahs = Math.max(
+    0,
+    Math.min(JUZ_30_SURAHS.length, Number(surahsCompleted) || 0)
+  );
   const averageScore = Math.round(((safeTajwid + safeFluency) / 2) * 10) / 10;
   const completionPercent = Math.round((safeSurahs / JUZ_30_SURAHS.length) * 100);
 
@@ -51,28 +65,54 @@ export function calculateTahfidzSummary(
 }
 
 export function validateDocumentInput(
-  categoryId: CategoryId,
+  rawCategoryId: CategoryId | string,
   input: Partial<AdminRecord>
 ): ValidationResult {
   const errors: string[] = [];
-  const config = CATEGORY_MAP[categoryId];
-  if (!config) {
+  const trimmedCat = (rawCategoryId || '').trim();
+  const isKnown =
+    Boolean(CATEGORY_MAP[trimmedCat as CategoryId]) ||
+    Boolean(LEGACY_CATEGORY_ID_MAP[trimmedCat]);
+  if (!isKnown) {
     return { valid: false, errors: ['Kategori administrasi tidak dikenali.'] };
   }
 
-  for (const field of config.fields) {
-    if (!field.required) continue;
-    const raw = input[field.key];
-    if (field.type === 'number') {
-      if (raw === undefined || raw === null || raw === '' || Number.isNaN(Number(raw))) {
-        errors.push(`${field.label} wajib diisi dengan angka yang valid.`);
+  const categoryId = normalizeCategoryId(trimmedCat);
+  const config = CATEGORY_MAP[categoryId];
+
+  const isLegacyTahfidzInput =
+    trimmedCat === 'rapor-tahfidz-juz-30' || isTahfidzRecord(input);
+
+  if (isLegacyTahfidzInput && trimmedCat === 'rapor-tahfidz-juz-30') {
+    if (!input.studentName || !input.studentName.trim()) {
+      errors.push('Nama Lengkap Siswa wajib diisi.');
+    }
+    if (!input.studentClass || !input.studentClass.trim()) {
+      errors.push('Kelas wajib diisi.');
+    }
+    if (!input.codeOrRef || !input.codeOrRef.trim()) {
+      errors.push('NIS / No. Induk wajib diisi.');
+    }
+  } else {
+    for (const field of config.fields) {
+      if (!field.required) continue;
+      const raw = input[field.key];
+      if (field.type === 'number') {
+        if (
+          raw === undefined ||
+          raw === null ||
+          raw === '' ||
+          Number.isNaN(Number(raw))
+        ) {
+          errors.push(`${field.label} wajib diisi dengan angka yang valid.`);
+        }
+      } else if (typeof raw !== 'string' || raw.trim().length === 0) {
+        errors.push(`${field.label} wajib diisi.`);
       }
-    } else if (typeof raw !== 'string' || raw.trim().length === 0) {
-      errors.push(`${field.label} wajib diisi.`);
     }
   }
 
-  if (categoryId === 'rapor-tahfidz-juz-30') {
+  if (isLegacyTahfidzInput) {
     const tajwid = Number(input.tajwidScore);
     const fluency = Number(input.fluencyScore);
     const surahs = Number(input.surahsCompleted);
@@ -82,8 +122,14 @@ export function validateDocumentInput(
     if (Number.isNaN(fluency) || fluency < 0 || fluency > 100) {
       errors.push('Nilai Kelancaran harus antara 0 hingga 100.');
     }
-    if (Number.isNaN(surahs) || surahs < 1 || surahs > JUZ_30_SURAHS.length) {
-      errors.push(`Jumlah Surah Hafal harus antara 1 hingga ${JUZ_30_SURAHS.length}.`);
+    if (
+      Number.isNaN(surahs) ||
+      surahs < 1 ||
+      surahs > JUZ_30_SURAHS.length
+    ) {
+      errors.push(
+        `Jumlah Surah Hafal harus antara 1 hingga ${JUZ_30_SURAHS.length}.`
+      );
     }
   }
 
@@ -94,11 +140,13 @@ export function validateDocumentInput(
 }
 
 export function normalizeRecordForCategory(
-  categoryId: CategoryId,
+  rawCategoryId: CategoryId | string,
   input: Partial<AdminRecord>
 ): AdminRecord {
+  const categoryId = normalizeCategoryId(rawCategoryId);
   const now = new Date().toISOString();
-  const isTahfidz = categoryId === 'rapor-tahfidz-juz-30';
+  const isTahfidz =
+    rawCategoryId === 'rapor-tahfidz-juz-30' || isTahfidzRecord(input);
   const tajwid = Number(input.tajwidScore ?? 0);
   const fluency = Number(input.fluencyScore ?? 0);
   const surahsCompleted = Number(input.surahsCompleted ?? 0);
@@ -109,8 +157,20 @@ export function normalizeRecordForCategory(
 
   const computedTitle = isTahfidz
     ? (input.title && input.title.trim()) ||
-      `Rapor Tahfidz — ${input.studentName || 'Siswa'} (${input.studentClass || '-'})`
+      `Rapor Tahfidz — ${input.studentName || 'Siswa'} (${
+        input.studentClass || input.className || '-'
+      })`
     : (input.title || '').trim();
+
+  const resolvedClass =
+    input.className?.trim() || input.studentClass?.trim() || undefined;
+  const resolvedMetric =
+    input.metricValue?.trim() ||
+    (isTahfidz && computedPredicate
+      ? `${surahsCompleted}/${JUZ_30_SURAHS.length} Surah · ${computedPredicate} (T:${tajwid}/K:${fluency})${
+          input.surahRange?.trim() ? ` · ${input.surahRange.trim()}` : ''
+        }`
+      : undefined);
 
   return {
     id: input.id || `${categoryId}-${Date.now()}`,
@@ -135,12 +195,46 @@ export function normalizeRecordForCategory(
     tajwidScore: isTahfidz ? tajwid : input.tajwidScore,
     fluencyScore: isTahfidz ? fluency : input.fluencyScore,
     tahfidzPredicate: isTahfidz ? computedPredicate : input.tahfidzPredicate,
-    className: input.className?.trim(),
+    className: resolvedClass,
     subjectTopic: input.subjectTopic?.trim(),
-    metricValue: input.metricValue?.trim(),
+    metricValue: resolvedMetric,
     createdAt: input.createdAt || now,
-    updatedAt: now,
+    updatedAt: input.updatedAt || now,
   };
+}
+
+export function normalizeRecordsList(records: AdminRecord[]): AdminRecord[] {
+  return (records || []).map((rec) => {
+    const normalizedCategoryId = normalizeCategoryId(rec.categoryId);
+    const resolvedClass =
+      rec.className || rec.studentClass || undefined;
+    const resolvedMetric =
+      rec.metricValue ||
+      (isTahfidzRecord(rec) && rec.surahsCompleted !== undefined
+        ? `${rec.surahsCompleted}/${JUZ_30_SURAHS.length} Surah · ${
+            rec.tahfidzPredicate ||
+            computeTahfidzPredicate(
+              Number(rec.tajwidScore ?? 0),
+              Number(rec.fluencyScore ?? 0)
+            )
+          }`
+        : undefined);
+
+    if (
+      normalizedCategoryId === rec.categoryId &&
+      resolvedClass === rec.className &&
+      resolvedMetric === rec.metricValue
+    ) {
+      return rec;
+    }
+
+    return {
+      ...rec,
+      categoryId: normalizedCategoryId,
+      ...(resolvedClass ? { className: resolvedClass } : {}),
+      ...(resolvedMetric ? { metricValue: resolvedMetric } : {}),
+    };
+  });
 }
 
 export function filterRecords(
@@ -186,7 +280,10 @@ function escapeCsvCell(value: unknown): string {
 const MAX_SPREADSHEET_CELL_CHARS = 45000;
 
 function safeSpreadsheetLink(record: AdminRecord): string {
-  if (record.driveViewUrl && record.driveViewUrl.length <= MAX_SPREADSHEET_CELL_CHARS) {
+  if (
+    record.driveViewUrl &&
+    record.driveViewUrl.length <= MAX_SPREADSHEET_CELL_CHARS
+  ) {
     return record.driveViewUrl;
   }
   if (record.fileUrl && record.fileUrl.length <= MAX_SPREADSHEET_CELL_CHARS) {
@@ -196,47 +293,9 @@ function safeSpreadsheetLink(record: AdminRecord): string {
 }
 
 export function buildSpreadsheetSheetRows(
-  categoryId: CategoryId,
+  _categoryId: CategoryId,
   records: AdminRecord[]
 ): string[][] {
-  if (categoryId === 'rapor-tahfidz-juz-30') {
-    const headers = [
-      'ID',
-      'NIS',
-      'Nama Siswa',
-      'Kelas',
-      'Rentang Surah Juz 30',
-      'Jumlah Surah',
-      'Nilai Tajwid',
-      'Nilai Kelancaran',
-      'Predikat',
-      'Tahun Pelajaran',
-      'Semester',
-      'Tanggal Penilaian',
-      'Status',
-      'Catatan Pembimbing',
-      'Lampiran Berkas',
-    ];
-    const rows = records.map((r) => [
-      r.id,
-      r.codeOrRef,
-      r.studentName || '',
-      r.studentClass || '',
-      r.surahRange || '',
-      String(r.surahsCompleted ?? ''),
-      String(r.tajwidScore ?? ''),
-      String(r.fluencyScore ?? ''),
-      r.tahfidzPredicate || '',
-      r.academicYear,
-      r.semester,
-      r.date,
-      r.status,
-      r.summary,
-      safeSpreadsheetLink(r) || r.fileName || '',
-    ]);
-    return [headers, ...rows];
-  }
-
   const headers = [
     'ID',
     'Judul Dokumen',
@@ -253,10 +312,13 @@ export function buildSpreadsheetSheetRows(
   ];
   const rows = records.map((r) => [
     r.id,
-    r.title,
+    r.title || (r.studentName ? `Rapor Tahfidz — ${r.studentName}` : ''),
     r.codeOrRef,
-    r.className || '',
-    r.metricValue || '',
+    r.className || r.studentClass || '',
+    r.metricValue ||
+      (r.tahfidzPredicate
+        ? `${r.surahsCompleted ?? 0}/${JUZ_30_SURAHS.length} Surah · ${r.tahfidzPredicate}`
+        : ''),
     r.academicYear,
     r.semester,
     r.date,
@@ -311,6 +373,7 @@ export function parseCsvToRecords(
   categoryId: CategoryId,
   csvText: string
 ): AdminRecord[] {
+  const canonicalId = normalizeCategoryId(categoryId);
   const lines = csvText
     .replace(/\r\n/g, '\n')
     .replace(/\r/g, '\n')
@@ -321,73 +384,41 @@ export function parseCsvToRecords(
   const records: AdminRecord[] = [];
   for (let i = 1; i < lines.length; i++) {
     const cols = parseCsvLine(lines[i]);
-    if (categoryId === 'rapor-tahfidz-juz-30') {
-      const [
-        id,
-        codeOrRef,
-        studentName,
-        studentClass,
-        surahRange,
-        surahsCompleted,
-        tajwidScore,
-        fluencyScore,
-        ,
-        academicYear,
-        semester,
-        date,
-        status,
-        summary,
-        fileName,
-      ] = cols;
-      records.push(
-        normalizeRecordForCategory(categoryId, {
-          id: id || undefined,
-          codeOrRef: codeOrRef || `NIS-${i}`,
-          studentName: studentName || 'Siswa',
-          studentClass: studentClass || 'Kelas VI',
-          surahRange: surahRange || 'An-Nas s.d. Ad-Duha',
-          surahsCompleted: Number(surahsCompleted) || 20,
-          tajwidScore: Number(tajwidScore) || 85,
-          fluencyScore: Number(fluencyScore) || 85,
-          academicYear: academicYear || '2026/2027',
-          semester: (semester as AdminRecord['semester']) || 'Ganjil',
-          date: date || new Date().toISOString().slice(0, 10),
-          status: (status as RecordStatus) || 'Terverifikasi',
-          summary: summary || 'Diimpor dari spreadsheet.',
-          fileName: fileName || undefined,
-        })
-      );
-    } else {
-      const [
-        id,
-        title,
-        codeOrRef,
-        className,
-        metricValue,
-        academicYear,
-        semester,
-        date,
-        status,
-        summary,
-        fileName,
-      ] = cols;
-      if (!title && !codeOrRef) continue;
-      records.push(
-        normalizeRecordForCategory(categoryId, {
-          id: id || undefined,
-          title: title || 'Dokumen Tanpa Judul',
-          codeOrRef: codeOrRef || `REF-${i}`,
-          className: className || undefined,
-          metricValue: metricValue || undefined,
-          academicYear: academicYear || '2026/2027',
-          semester: (semester as AdminRecord['semester']) || 'Ganjil',
-          date: date || new Date().toISOString().slice(0, 10),
-          status: (status as RecordStatus) || 'Terverifikasi',
-          summary: summary || 'Diimpor dari spreadsheet.',
-          fileName: fileName || undefined,
-        })
-      );
-    }
+    const [
+      id,
+      title,
+      codeOrRef,
+      className,
+      metricValue,
+      academicYear,
+      semester,
+      date,
+      status,
+      summary,
+      fileName,
+      fileLink,
+    ] = cols;
+    if (!title && !codeOrRef) continue;
+    const isHttp = Boolean(fileLink) && fileLink.startsWith('http');
+    records.push(
+      normalizeRecordForCategory(canonicalId, {
+        id: id || undefined,
+        title: title || 'Dokumen Tanpa Judul',
+        codeOrRef: codeOrRef || `REF-${i}`,
+        className: className || undefined,
+        metricValue: metricValue || undefined,
+        academicYear: academicYear || '2026/2027',
+        semester: (semester as AdminRecord['semester']) || 'Ganjil',
+        date: date || new Date().toISOString().slice(0, 10),
+        status: (status as RecordStatus) || 'Terverifikasi',
+        summary: summary || 'Diimpor dari spreadsheet.',
+        fileName: fileName || undefined,
+        driveFileId: isHttp
+          ? extractGoogleDriveFileId(fileLink) || undefined
+          : undefined,
+        driveViewUrl: isHttp ? fileLink : undefined,
+      })
+    );
   }
   return records;
 }
@@ -400,8 +431,9 @@ export function getCategoryCounts(
     counts[cat.id] = 0;
   }
   for (const r of records) {
-    if (counts[r.categoryId] !== undefined) {
-      counts[r.categoryId]++;
+    const catId = normalizeCategoryId(r.categoryId);
+    if (counts[catId] !== undefined) {
+      counts[catId]++;
     }
   }
   return counts;
@@ -428,7 +460,9 @@ export function extractGoogleDriveFileId(rawUrl?: string): string | null {
   if (!trimmed) return null;
   const fileMatch = trimmed.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/);
   if (fileMatch?.[1]) return fileMatch[1];
-  const openMatch = trimmed.match(/drive\.google\.com\/(?:open|uc|thumbnail)\?[^#]*id=([a-zA-Z0-9_-]+)/);
+  const openMatch = trimmed.match(
+    /drive\.google\.com\/(?:open|uc|thumbnail)\?[^#]*id=([a-zA-Z0-9_-]+)/
+  );
   if (openMatch?.[1]) return openMatch[1];
   return null;
 }
@@ -481,10 +515,17 @@ export function validateGameInput(input: {
     errors.push('Nama game wajib diisi.');
   }
   if (!input.gameUrl || !isValidHttpUrl(input.gameUrl)) {
-    errors.push('Link game wajib berupa URL valid (diawali http:// atau https://).');
+    errors.push(
+      'Link game wajib berupa URL valid (diawali http:// atau https://).'
+    );
   }
-  if (!input.hasScreenshotFile && (!input.screenshotUrl || !input.screenshotUrl.trim())) {
-    errors.push('Screenshot game wajib diisi (unggah gambar atau masukkan URL screenshot).');
+  if (
+    !input.hasScreenshotFile &&
+    (!input.screenshotUrl || !input.screenshotUrl.trim())
+  ) {
+    errors.push(
+      'Screenshot game wajib diisi (unggah gambar atau masukkan URL screenshot).'
+    );
   }
   return { valid: errors.length === 0, errors };
 }
@@ -531,8 +572,9 @@ export function buildAppsScriptPayload(
   onlyCategoryId?: CategoryId,
   games?: GameItem[]
 ): AppsScriptSyncPayload {
+  const normalizedRecords = normalizeRecordsList(records);
   const targetCategories = onlyCategoryId
-    ? CATEGORIES.filter((c) => c.id === onlyCategoryId)
+    ? CATEGORIES.filter((c) => c.id === normalizeCategoryId(onlyCategoryId))
     : CATEGORIES;
 
   const safePhotoUrl =
@@ -547,7 +589,9 @@ export function buildAppsScriptPayload(
             g.id,
             g.title,
             g.gameUrl,
-            g.screenshotUrl && g.screenshotUrl.length <= 45000 ? g.screenshotUrl : '',
+            g.screenshotUrl && g.screenshotUrl.length <= 45000
+              ? g.screenshotUrl
+              : '',
             g.updatedAt,
           ]),
         ],
@@ -582,7 +626,7 @@ export function buildAppsScriptPayload(
       sheetTabName: cat.sheetTabName,
       rows: buildSpreadsheetSheetRows(
         cat.id,
-        records.filter((r) => r.categoryId === cat.id)
+        normalizedRecords.filter((r) => r.categoryId === cat.id)
       ),
     })),
   };
@@ -674,25 +718,59 @@ export function parseAppsScriptResponse(
   }
 
   const parsedRecords: AdminRecord[] = [];
+  const seenIds = new Set<string>();
   let hasRemoteSheets = false;
 
   if (Array.isArray(raw.sheets)) {
-    for (const sheet of raw.sheets) {
-      const matchedCat = CATEGORIES.find(
+    // Prioritize canonical 14 tabs first, then legacy tabs if canonical tab was empty
+    const orderedSheets = [...raw.sheets].sort((a, b) => {
+      const aCanonical = CATEGORIES.some(
+        (c) => c.id === a.categoryId || c.sheetTabName === a.sheetTabName
+      );
+      const bCanonical = CATEGORIES.some(
+        (c) => c.id === b.categoryId || c.sheetTabName === b.sheetTabName
+      );
+      return Number(bCanonical) - Number(aCanonical);
+    });
+
+    const populatedCategories = new Set<CategoryId>();
+
+    for (const sheet of orderedSheets) {
+      const directCat = CATEGORIES.find(
         (c) =>
           c.id === sheet.categoryId || c.sheetTabName === sheet.sheetTabName
       );
+      const legacyId =
+        (sheet.sheetTabName && LEGACY_TAB_NAME_MAP[sheet.sheetTabName]) ||
+        (sheet.categoryId && LEGACY_CATEGORY_ID_MAP[sheet.categoryId]) ||
+        undefined;
+      const matchedCat =
+        directCat || (legacyId ? CATEGORY_MAP[legacyId] : undefined);
+
       if (!matchedCat || !Array.isArray(sheet.rows) || sheet.rows.length < 2) {
         continue;
       }
+
+      const isLegacySheet = !directCat;
+      if (isLegacySheet && populatedCategories.has(matchedCat.id)) {
+        continue;
+      }
+
       hasRemoteSheets = true;
+      const isLegacyTahfidzRows =
+        sheet.sheetTabName === '09_Rapor_Tahfidz_Juz30' ||
+        sheet.categoryId === 'rapor-tahfidz-juz-30' ||
+        (Array.isArray(sheet.rows[0]) &&
+          String(sheet.rows[0][2] ?? '').trim() === 'Nama Siswa');
+
       for (let i = 1; i < sheet.rows.length; i++) {
         const cols = Array.isArray(sheet.rows[i])
           ? sheet.rows[i].map((c) => String(c ?? ''))
           : [];
         if (cols.every((c) => c.trim() === '')) continue;
 
-        if (matchedCat.id === 'rapor-tahfidz-juz-30') {
+        let rec: AdminRecord | null = null;
+        if (isLegacyTahfidzRows) {
           const [
             id,
             codeOrRef,
@@ -717,29 +795,28 @@ export function parseAppsScriptResponse(
           const isDirectFile =
             Boolean(fileRef) &&
             (fileRef.startsWith('/api/') || fileRef.startsWith('data:'));
-          parsedRecords.push(
-            normalizeRecordForCategory(matchedCat.id, {
-              id: id || undefined,
-              codeOrRef: codeOrRef || `NIS-${i}`,
-              studentName: studentName || 'Siswa',
-              studentClass: studentClass || 'Kelas VI',
-              surahRange: surahRange || 'An-Nas s.d. Ad-Duha',
-              surahsCompleted: Number(surahsCompleted) || 20,
-              tajwidScore: Number(tajwidScore) || 85,
-              fluencyScore: Number(fluencyScore) || 85,
-              academicYear: academicYear || '2026/2027',
-              semester: (semester as AdminRecord['semester']) || 'Ganjil',
-              date: date || new Date().toISOString().slice(0, 10),
-              status: (status as RecordStatus) || 'Terverifikasi',
-              summary: summary || '-',
-              fileName: isHttpLink || isDirectFile ? undefined : fileRef || undefined,
-              driveFileId: isHttpLink
-                ? extractGoogleDriveFileId(fileRef) || undefined
-                : undefined,
-              driveViewUrl: isHttpLink ? fileRef : undefined,
-              fileUrl: isDirectFile ? fileRef : undefined,
-            })
-          );
+          rec = normalizeRecordForCategory(matchedCat.id, {
+            id: id || undefined,
+            codeOrRef: codeOrRef || `NIS-${i}`,
+            studentName: studentName || 'Siswa',
+            studentClass: studentClass || 'Kelas VI',
+            surahRange: surahRange || 'An-Nas s.d. Ad-Duha',
+            surahsCompleted: Number(surahsCompleted) || 20,
+            tajwidScore: Number(tajwidScore) || 85,
+            fluencyScore: Number(fluencyScore) || 85,
+            academicYear: academicYear || '2026/2027',
+            semester: (semester as AdminRecord['semester']) || 'Ganjil',
+            date: date || new Date().toISOString().slice(0, 10),
+            status: (status as RecordStatus) || 'Terverifikasi',
+            summary: summary || '-',
+            fileName:
+              isHttpLink || isDirectFile ? undefined : fileRef || undefined,
+            driveFileId: isHttpLink
+              ? extractGoogleDriveFileId(fileRef) || undefined
+              : undefined,
+            driveViewUrl: isHttpLink ? fileRef : undefined,
+            fileUrl: isDirectFile ? fileRef : undefined,
+          });
         } else {
           const [
             id,
@@ -757,30 +834,67 @@ export function parseAppsScriptResponse(
           ] = cols;
           if (!title && !codeOrRef) continue;
           const isHttp = Boolean(fileLink) && fileLink.startsWith('http');
-          parsedRecords.push(
-            normalizeRecordForCategory(matchedCat.id, {
-              id: id || undefined,
-              title: title || 'Dokumen Tanpa Judul',
-              codeOrRef: codeOrRef || `REF-${i}`,
-              className: className || undefined,
-              metricValue: metricValue || undefined,
-              academicYear: academicYear || '2026/2027',
-              semester: (semester as AdminRecord['semester']) || 'Ganjil',
-              date: date || new Date().toISOString().slice(0, 10),
-              status: (status as RecordStatus) || 'Terverifikasi',
-              summary: summary || '-',
-              fileName: fileName || undefined,
-              driveFileId: isHttp
-                ? extractGoogleDriveFileId(fileLink) || undefined
-                : undefined,
-              driveViewUrl: isHttp ? fileLink : undefined,
-              fileUrl:
-                fileLink &&
-                (fileLink.startsWith('/api/') || fileLink.startsWith('data:'))
-                  ? fileLink
-                  : undefined,
-            })
+          const tahfidzMetricMatch = (metricValue || '').match(
+            /^(\d+)\s*\/\s*\d+\s*Surah(?:\s*·\s*[^·(]+)?(?:\s*\(T:(\d+)\/K:(\d+)\))?(?:\s*·\s*(.+))?$/i
           );
+          const isEncodedTahfidz =
+            matchedCat.id === 'data-siswa' &&
+            (/^Rapor Tahfidz\s*[—-]/i.test(title || '') || Boolean(tahfidzMetricMatch));
+          const parsedStudentName = isEncodedTahfidz
+            ? (title || '')
+                .replace(/^Rapor Tahfidz\s*[—-]\s*/i, '')
+                .replace(/\s*\([^)]+\)\s*$/, '')
+                .trim()
+            : undefined;
+          rec = normalizeRecordForCategory(matchedCat.id, {
+            id: id || undefined,
+            title: title || 'Dokumen Tanpa Judul',
+            codeOrRef: codeOrRef || `REF-${i}`,
+            className: className || undefined,
+            metricValue: metricValue || undefined,
+            ...(isEncodedTahfidz && parsedStudentName
+              ? {
+                  studentName: parsedStudentName,
+                  studentClass: className || undefined,
+                  surahsCompleted: tahfidzMetricMatch
+                    ? Number(tahfidzMetricMatch[1])
+                    : undefined,
+                  tajwidScore:
+                    tahfidzMetricMatch && tahfidzMetricMatch[2]
+                      ? Number(tahfidzMetricMatch[2])
+                      : undefined,
+                  fluencyScore:
+                    tahfidzMetricMatch && tahfidzMetricMatch[3]
+                      ? Number(tahfidzMetricMatch[3])
+                      : undefined,
+                  surahRange:
+                    tahfidzMetricMatch && tahfidzMetricMatch[4]
+                      ? tahfidzMetricMatch[4].trim()
+                      : undefined,
+                }
+              : {}),
+            academicYear: academicYear || '2026/2027',
+            semester: (semester as AdminRecord['semester']) || 'Ganjil',
+            date: date || new Date().toISOString().slice(0, 10),
+            status: (status as RecordStatus) || 'Terverifikasi',
+            summary: summary || '-',
+            fileName: fileName || undefined,
+            driveFileId: isHttp
+              ? extractGoogleDriveFileId(fileLink) || undefined
+              : undefined,
+            driveViewUrl: isHttp ? fileLink : undefined,
+            fileUrl:
+              fileLink &&
+              (fileLink.startsWith('/api/') || fileLink.startsWith('data:'))
+                ? fileLink
+                : undefined,
+          });
+        }
+
+        if (rec && !seenIds.has(rec.id)) {
+          seenIds.add(rec.id);
+          parsedRecords.push(rec);
+          populatedCategories.add(matchedCat.id);
         }
       }
     }
@@ -797,6 +911,23 @@ export function parseAppsScriptResponse(
 export const APPS_SCRIPT_CODE_TEMPLATE = `var TARGET_DRIVE_FOLDER_ID = '${DEFAULT_GOOGLE_DRIVE_FOLDER_ID}';
 
 var TAB_NAMES = [
+  '01_Profil_Sekolah',
+  '02_Visi_dan_Misi',
+  '03_Curiculum_Vitae',
+  '04_Program_Ajar',
+  '05_Kegiatan_KBM',
+  '06_Asesmen_Pembelajaran',
+  '07_Piloting_PAIS_Berkarakter',
+  '08_Analisa_Hasil_Asesmen',
+  '09_Pengembangan_Diri',
+  '10_Data_Siswa',
+  '11_Bank_Soal',
+  '12_Pembiasaan_Keagamaan',
+  '13_Galeri',
+  '14_Berkas_TPG'
+];
+
+var LEGACY_TAB_NAMES = [
   '01_Berkas_TPG',
   '02_Program_Ajar',
   '03_KBM',
@@ -817,10 +948,17 @@ function doGet() {
     var gameSheet = ss.getSheetByName('Game_Center');
     var gameRows = gameSheet ? gameSheet.getDataRange().getDisplayValues() : [];
 
-    var sheets = TAB_NAMES.map(function (tabName) {
+    var seen = {};
+    var allNames = TAB_NAMES.concat(LEGACY_TAB_NAMES);
+    var sheets = [];
+    allNames.forEach(function (tabName) {
+      if (seen[tabName]) return;
+      seen[tabName] = true;
       var sheet = ss.getSheetByName(tabName);
-      var rows = sheet ? sheet.getDataRange().getDisplayValues() : [];
-      return { sheetTabName: tabName, rows: rows };
+      if (sheet || TAB_NAMES.indexOf(tabName) >= 0) {
+        var rows = sheet ? sheet.getDataRange().getDisplayValues() : [];
+        sheets.push({ sheetTabName: tabName, rows: rows });
+      }
     });
 
     return ContentService
@@ -880,6 +1018,16 @@ function doPost(e) {
   }
 }
 
+// Pilih fungsi "izinkanAksesDrive" di menu atas editor Apps Script lalu klik "Run" SEKALI SAJA.
+// Pastikan SEMUA kotak centang izin Google Drive dicentang saat diminta!
+function izinkanAksesDrive() {
+  var folder = DriveApp.getFolderById(TARGET_DRIVE_FOLDER_ID);
+  var testFile = folder.createFile('_uji_izin_upload.txt', 'ok');
+  testFile.setTrashed(true);
+  Logger.log('Izin TULIS Google Drive aktif untuk folder: ' + folder.getName());
+  return folder.getName();
+}
+
 function getOrCreateFolder_(parentFolder, name) {
   var it = parentFolder.getFoldersByName(name);
   if (it.hasNext()) return it.next();
@@ -893,6 +1041,10 @@ function uploadFileToDrive_(payload) {
     try {
       targetFolder = DriveApp.getFolderById(folderId);
     } catch (folderErr) {
+      var errMsg = String(folderErr || '');
+      if (errMsg.indexOf('auth/drive') >= 0 || errMsg.indexOf('izin') >= 0 || errMsg.indexOf('permission') >= 0) {
+        throw folderErr;
+      }
       targetFolder = null;
     }
   }
@@ -954,8 +1106,9 @@ export function escapeXml(str: string): string {
 }
 
 export function buildExcelWorkbookXml(records: AdminRecord[]): string {
+  const normalized = normalizeRecordsList(records);
   const sheetsXml = CATEGORIES.map((cat) => {
-    const catRecords = records.filter((r) => r.categoryId === cat.id);
+    const catRecords = normalized.filter((r) => r.categoryId === cat.id);
     const rows = buildSpreadsheetSheetRows(cat.id, catRecords);
     const rowsXml = rows
       .map(
@@ -993,7 +1146,7 @@ export function buildPublicDocumentHtml(
   record: AdminRecord,
   profile: TeacherProfile
 ): string {
-  const config = CATEGORY_MAP[record.categoryId];
+  const config = CATEGORY_MAP[normalizeCategoryId(record.categoryId)];
   const safeTitle = escapeXml(record.studentName || record.title);
   return `<!doctype html>
 <html lang="id">

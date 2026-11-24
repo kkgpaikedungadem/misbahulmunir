@@ -38,7 +38,7 @@ export default function App() {
   const activeViewRef = useRef<'public' | 'admin'>('public');
   activeViewRef.current = activeView;
   const [targetAdminSection, setTargetAdminSection] =
-    useState<DashboardSection>('berkas-tpg');
+    useState<DashboardSection>('profil-sekolah');
   const [loginModalOpen, setLoginModalOpen] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<AdminRecord | null>(null);
   const [googleUser, setGoogleUser] = useState<FirebaseUser | null>(null);
@@ -109,7 +109,7 @@ export default function App() {
   }, []);
 
   const handleOpenAdmin = () => {
-    setTargetAdminSection('berkas-tpg');
+    setTargetAdminSection('profil-sekolah');
     if (isAuthenticated) {
       setActiveView('admin');
       window.scrollTo({ top: 0, behavior: 'smooth' });

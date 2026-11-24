@@ -15,8 +15,10 @@ import {
   CATEGORY_MAP,
   CategoryId,
   GameItem,
+  LEGACY_CATEGORY_ID_MAP,
   SpreadsheetSyncInfo,
   TeacherProfile,
+  normalizeCategoryId,
 } from './src/shared/categories';
 import {
   AppsScriptPullRaw,
@@ -28,6 +30,7 @@ import {
   normalizeExternalPhotoUrl,
   normalizeGameItem,
   normalizeRecordForCategory,
+  normalizeRecordsList,
   parseAppsScriptResponse,
   parseCsvToRecords,
   validateDocumentInput,
@@ -84,7 +87,9 @@ function readDb(): DatabaseState {
     const parsed = JSON.parse(raw) as DatabaseState;
     return {
       profile: parsed.profile || DEFAULT_PROFILE,
-      records: Array.isArray(parsed.records) ? parsed.records : SEED_RECORDS,
+      records: Array.isArray(parsed.records)
+        ? normalizeRecordsList(parsed.records)
+        : SEED_RECORDS,
       games: Array.isArray(parsed.games) ? parsed.games : DEFAULT_GAMES,
       syncInfo: {
         ...DEFAULT_SYNC_INFO,
@@ -474,14 +479,20 @@ async function startServer(): Promise<void> {
 
   // CSV & Multi-tab Spreadsheet exports
   app.get('/api/export/csv/:categoryId', (req: Request, res: Response) => {
-    const categoryId = req.params.categoryId as CategoryId;
-    const config = CATEGORY_MAP[categoryId];
-    if (!config) {
+    const rawCat = req.params.categoryId;
+    const isKnown =
+      Boolean(CATEGORY_MAP[rawCat as CategoryId]) ||
+      Boolean(LEGACY_CATEGORY_ID_MAP[rawCat]);
+    if (!isKnown) {
       res.status(404).json({ error: 'Kategori tidak ditemukan.' });
       return;
     }
+    const categoryId = normalizeCategoryId(rawCat);
+    const config = CATEGORY_MAP[categoryId];
     const db = readDb();
-    const filtered = db.records.filter((r) => r.categoryId === categoryId);
+    const filtered = db.records.filter(
+      (r) => normalizeCategoryId(r.categoryId) === categoryId
+    );
     const csv = `\uFEFF${formatRecordsToCsv(categoryId, filtered)}`;
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader(
@@ -497,7 +508,7 @@ async function startServer(): Promise<void> {
     res.setHeader('Content-Type', 'application/vnd.ms-excel; charset=utf-8');
     res.setHeader(
       'Content-Disposition',
-      'attachment; filename="Database_Administrasi_GPAI_9_Kategori.xls"'
+      'attachment; filename="Database_Administrasi_GPAI_14_Kategori.xls"'
     );
     res.send(xml);
   });
