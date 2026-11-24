@@ -672,12 +672,18 @@ export function AdminDashboard({
         message: `Akun Google (${result.user.email}) terhubung untuk Google Sheets & Google Drive.`,
       });
     } catch (err) {
+      const msg = err instanceof Error ? err.message : '';
+      let friendlyMsg = msg || 'Gagal menghubungkan akun Google Workspace.';
+      if (msg.includes('unauthorized-domain')) {
+        friendlyMsg =
+          'Domain GitHub Pages tidak memakai Sign in with Google langsung. Gunakan kode Apps Script (Code.gs) di menu Database Google Sheets agar unggah Drive & sinkronisasi berjalan otomatis tanpa login Google.';
+      } else if (msg.includes('popup-blocked')) {
+        friendlyMsg =
+          'Popup login Google diblokir oleh browser. Izinkan popup atau gunakan Google Apps Script (Code.gs) agar tetap otomatis tanpa login Google.';
+      }
       setFeedback({
         type: 'error',
-        message:
-          err instanceof Error
-            ? err.message
-            : 'Gagal menghubungkan akun Google Workspace.',
+        message: friendlyMsg,
       });
     } finally {
       setGoogleBusy(false);

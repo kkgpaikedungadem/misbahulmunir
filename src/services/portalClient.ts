@@ -14,6 +14,7 @@ import {
   GameItem,
   SpreadsheetSyncInfo,
   TeacherProfile,
+  getAppBaseUrl,
   resolveAppAssetUrl,
 } from '../shared/categories';
 import {
@@ -50,7 +51,7 @@ const ENV_VITE_APPS_SCRIPT_URL = (
 
 let detectedBackendMode: 'unknown' | 'api' | 'static' =
   typeof window !== 'undefined' &&
-  window.location.hostname.endsWith('.github.io')
+  (window.location.hostname.endsWith('.github.io') || getAppBaseUrl() !== '/')
     ? 'static'
     : 'unknown';
 
@@ -1238,6 +1239,18 @@ export async function uploadAttachmentViaAppsScript(
     });
 
     const rawText = await res.text();
+    const trimmed = rawText.trim();
+    if (
+      trimmed.startsWith('<!DOCTYPE') ||
+      trimmed.startsWith('<html') ||
+      rawText.includes('accounts.google.com')
+    ) {
+      return {
+        ok: false,
+        error:
+          'Google Apps Script meminta login Google. Pastikan Web App sudah di-deploy dengan akses "Anyone / Siapa saja".',
+      };
+    }
     if (!res.ok) {
       return { ok: false, error: `HTTP ${res.status}` };
     }

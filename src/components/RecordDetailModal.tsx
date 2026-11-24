@@ -13,6 +13,7 @@ import {
   AdminRecord,
   CATEGORY_MAP,
   TeacherProfile,
+  getAppBaseUrl,
   resolveAppAssetUrl,
 } from '../shared/categories';
 import {
@@ -76,7 +77,7 @@ export function RecordDetailModal({
   const isUnreachableApiFile = Boolean(
     record.fileUrl?.startsWith('/api/') &&
       typeof window !== 'undefined' &&
-      window.location.hostname.endsWith('.github.io')
+      (window.location.hostname.endsWith('.github.io') || getAppBaseUrl() !== '/')
   );
   const effectiveFileUrl =
     !isUnreachableApiFile && !fileLoadError && record.fileUrl
